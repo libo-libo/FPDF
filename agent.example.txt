@@ -1,0 +1,2 @@
+https://your-api.example/v1
+YOUR_API_KEY

@@ -1,0 +1,16 @@
+/target/
+/dist/
+/runtime/
+/analysis/tools/
+/analysis/wps-pdf/unpacked/
+/analysis/validation/
+/*.exe
+/agent.txt
+/githubtoken.txt
+/.env
+/.env.*
+/.publish/
+/output/
+/tmp/
+/analysis/
+/ai-runtime/node_modules/

@@ -1,0 +1,204 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /Outlines 10 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 19 0 R 20 0 R 21 0 R 22 0 R 23 0 R 24 0 R 25 0 R 26 0 R] /Count 16 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 1089 >>
+stream
+1 1 1 rg 0 0 612 792 re f
+0.85 0.20 0.21 rg 0 775 612 17 re f
+0.85 0.20 0.21 rg
+BT /F1 18 Tf 46 719 Td (fpdf / READING NOTES) Tj ET
+
+0.16 0.19 0.24 rg
+BT /F1 34 Tf 46 662 Td (A clearer way to read.) Tj ET
+
+0.45 0.49 0.55 rg
+BT /F1 12 Tf 46 626 Td (Open a document. Find your place. Focus on what matters.) Tj ET
+
+0.93 0.94 0.96 rg 46 460 520 125 re f
+0.16 0.19 0.24 rg
+BT /F1 16 Tf 66 550 Td (01   Start with the essentials) Tj ET
+
+BT /F1 12 Tf 66 518 Td (Page navigation, zoom, rotation and searchable page text.) Tj ET
+
+BT /F1 12 Tf 66 494 Td (A Rust desktop reader with a dedicated PDF render worker.) Tj ET
+
+0.85 0.20 0.21 rg
+BT /F1 18 Tf 46 411 Td (Read at your own pace) Tj ET
+
+0.16 0.19 0.24 rg
+BT /F1 12 Tf 46 374 Td (Use Page Down to continue to the landscape chart.) Tj ET
+
+BT /F1 12 Tf 46 350 Td (Use Ctrl+F to find the word essentials on this page.) Tj ET
+
+BT /F1 12 Tf 46 326 Td (Zoom in to inspect vector text and lines.) Tj ET
+
+0.87 0.88 0.91 RG 46 105 m 566 105 l S
+0.45 0.49 0.55 rg
+BT /F1 10 Tf 46 74 Td (FPDF SAMPLE DOCUMENT) Tj ET
+
+BT /F1 10 Tf 521 74 Td (1 / 3) Tj ET
+
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>
+endobj
+6 0 obj
+<< /Length 654 >>
+stream
+1 1 1 rg 0 0 792 612 re f
+0.85 0.20 0.21 rg 0 595 792 17 re f
+0.16 0.19 0.24 rg
+BT /F1 28 Tf 46 535 Td (A different perspective.) Tj ET
+
+BT /F1 12 Tf 46 498 Td (Landscape pages keep their own aspect ratio.) Tj ET
+
+0.85 0.20 0.21 rg 100 150 110 140 re f
+0.91 0.42 0.40 rg 270 150 110 220 re f
+0.96 0.67 0.61 rg 440 150 110 280 re f
+0.98 0.82 0.78 rg 610 150 90 180 re f
+0.16 0.19 0.24 rg
+BT /F1 12 Tf 120 119 Td (Open) Tj ET
+
+BT /F1 12 Tf 290 119 Td (Navigate) Tj ET
+
+BT /F1 12 Tf 460 119 Td (Explore) Tj ET
+
+BT /F1 12 Tf 620 119 Td (Focus) Tj ET
+
+0.45 0.49 0.55 rg
+BT /F1 10 Tf 46 55 Td (FPDF SAMPLE DOCUMENT) Tj ET
+
+BT /F1 10 Tf 700 55 Td (2 / 3) Tj ET
+
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 778 >>
+stream
+1 1 1 rg 0 0 612 792 re f
+0.85 0.20 0.21 rg 0 775 612 17 re f
+0.16 0.19 0.24 rg
+BT /F1 29 Tf 46 711 Td (Every page has a story.) Tj ET
+
+BT /F1 13 Tf 46 665 Td (This is the third and final page.) Tj ET
+
+BT /F1 12 Tf 46 626 Td (Try rotating this page, then return to fit width.) Tj ET
+
+BT /F1 12 Tf 46 597 Td (The text panel lets you select and copy extracted text.) Tj ET
+
+0.93 0.94 0.96 rg 46 260 520 270 re f
+0.85 0.20 0.21 rg
+BT /F1 21 Tf 72 474 Td (Small tools. Clear purpose.) Tj ET
+
+0.16 0.19 0.24 rg
+BT /F1 12 Tf 72 431 Td (The application and sample document are independent) Tj ET
+
+BT /F1 12 Tf 72 407 Td (implementations. No WPS runtime DLL is required.) Tj ET
+
+0.45 0.49 0.55 rg
+BT /F1 10 Tf 46 74 Td (FPDF SAMPLE DOCUMENT) Tj ET
+
+BT /F1 10 Tf 521 74 Td (3 / 3) Tj ET
+
+endstream
+endobj
+9 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+10 0 obj
+<< /Type /Outlines /First 11 0 R /Last 13 0 R /Count 3 >>
+endobj
+11 0 obj
+<< /Title (01 Essentials) /Parent 10 0 R /Next 12 0 R /Dest [3 0 R /Fit] >>
+endobj
+12 0 obj
+<< /Title (02 Landscape) /Parent 10 0 R /Prev 11 0 R /Next 13 0 R /Dest [5 0 R /Fit] >>
+endobj
+13 0 obj
+<< /Title (03 Final page) /Parent 10 0 R /Prev 12 0 R /Dest [7 0 R /Fit] >>
+endobj
+14 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>
+endobj
+15 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>
+endobj
+16 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>
+endobj
+17 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>
+endobj
+18 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>
+endobj
+19 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>
+endobj
+20 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>
+endobj
+21 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>
+endobj
+22 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>
+endobj
+23 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>
+endobj
+24 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>
+endobj
+25 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>
+endobj
+26 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>
+endobj
+xref
+0 27
+0000000000 65535 f 
+0000000009 00000 n 
+0000000075 00000 n 
+0000000236 00000 n 
+0000000362 00000 n 
+0000001503 00000 n 
+0000001629 00000 n 
+0000002334 00000 n 
+0000002460 00000 n 
+0000003289 00000 n 
+0000003359 00000 n 
+0000003433 00000 n 
+0000003525 00000 n 
+0000003629 00000 n 
+0000003721 00000 n 
+0000003848 00000 n 
+0000003975 00000 n 
+0000004102 00000 n 
+0000004229 00000 n 
+0000004356 00000 n 
+0000004483 00000 n 
+0000004610 00000 n 
+0000004737 00000 n 
+0000004864 00000 n 
+0000004991 00000 n 
+0000005118 00000 n 
+0000005245 00000 n 
+trailer
+<< /Size 27 /Root 1 0 R /ID [<30488478751944b006fe8f2659a6ab16> <30488478751944b006fe8f2659a6ab16>] >>
+startxref
+5372
+%%EOF
