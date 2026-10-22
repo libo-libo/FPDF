@@ -2,21 +2,21 @@
 
 Windows x64 PDF 阅读器，使用 Rust 编写。支持连续阅读、目录编辑、夜间与护眼模式，以及基于 pi agent 的 AI 辅助阅读。PDF 解析使用独立 PDFium，无需安装 WPS。
 
-[下载最新版](https://github.com/libo-libo/FPDF/releases/latest) · [中文 PDF 使用说明](https://github.com/libo-libo/FPDF/releases/download/v0.8.3/fpdf-0.8.3-user-guide-zh-CN.pdf) · [更新记录](CHANGELOG.md)
+[下载最新版](https://github.com/libo-libo/FPDF/releases/latest) · [中文 PDF 使用说明](https://github.com/libo-libo/FPDF/releases/download/v0.8.4/fpdf-0.8.4-user-guide-zh-CN.pdf) · [更新记录](CHANGELOG.md)
 
 ![夜间模式与目录页码](docs/fpdf-outline-pages-preview.png)
 
 ## 从 GitHub 下载和安装
 
 1. 打开 [FPDF 仓库](https://github.com/libo-libo/FPDF)，点击右侧 **Releases**；也可以直接打开[版本下载页](https://github.com/libo-libo/FPDF/releases/latest)。
-2. 进入最新版本（当前 **v0.8.3**），展开下方 **Assets**。点击文件名下载，无需 Git 或 GitHub 账号。
+2. 进入最新版本（当前 **v0.8.4**），展开下方 **Assets**。点击文件名下载，无需 Git 或 GitHub 账号。
 3. 选择下面的安装程序或免安装包。`Source code (zip)` / `Source code (tar.gz)` 是开发用源码，不能直接作为阅读器运行。
 
 | 文件 | 使用方法 |
 | --- | --- |
-| `fpdf-0.8.3-windows-x64-setup.exe` | 双击，按向导安装到当前用户目录，创建开始菜单快捷方式；可在 Windows 设置中卸载。 |
-| `fpdf-0.8.3-windows-x64.zip` | 右键 → 全部解压，再打开解压目录中的 `fpdf.exe`。 |
-| `fpdf-0.8.3-user-guide-zh-CN.pdf` | 中文使用说明，包含下载、阅读、目录编辑和 AI 翻译。 |
+| `fpdf-0.8.4-windows-x64-setup.exe` | 双击，按向导安装到当前用户目录，创建开始菜单快捷方式；可在 Windows 设置中卸载。 |
+| `fpdf-0.8.4-windows-x64.zip` | 右键 → 全部解压，再打开解压目录中的 `fpdf.exe`。 |
+| `fpdf-0.8.4-user-guide-zh-CN.pdf` | 中文使用说明，包含下载、阅读、目录编辑和 AI 翻译。 |
 | `SHA256SUMS.txt` | 下载校验值，使用以下命令核对。 |
 
 要求 Windows 10/11 x64。发行包自带 PDFium 与 AI 所需的 Node.js，无需安装 Rust、Node.js 或开发工具。**保留整个程序目录**，包括 `pdfium.dll`、`ai/` 和许可证，不能只复制 `fpdf.exe`。当前安装程序未做代码签名。
@@ -24,14 +24,16 @@ Windows x64 PDF 阅读器，使用 Rust 编写。支持连续阅读、目录编�
 在 PowerShell 中计算文件 SHA-256，与同版本的 `SHA256SUMS.txt` 对照：
 
 ```powershell
-Get-FileHash .\fpdf-0.8.3-windows-x64-setup.exe -Algorithm SHA256
+Get-FileHash .\fpdf-0.8.4-windows-x64-setup.exe -Algorithm SHA256
 ```
 
 升级前关闭旧版，再运行新安装程序；免安装版建议解压到新目录。自行创建的 AI 配置建议放在 `%APPDATA%/fpdf/agent.txt`，便于升级保留。
 
-0.8.3 修正版补充了 Windows P 图标、应用内 API 配置和一键卸载入口。安装版可从“文件 → 卸载 fpdf（清除全部配置）”或开始菜单同名入口确认后移除程序及其保存的 AI 配置、主题、缓存和日志；保留用户 PDF。Windows 设置的“已安装的应用”也支持卸载。
+0.8.4 修正版补充了 Windows P 图标、应用内 API 配置和一键卸载入口。安装版可从“文件 → 卸载 fpdf（清除全部配置）”或开始菜单同名入口确认后移除程序及其保存的 AI 配置、主题、缓存和日志；保留用户 PDF。Windows 设置的“已安装的应用”也支持卸载。
 
 ## 基本阅读
+
+顶部标签栏可在同一窗口打开多个 PDF。点击 `＋` 或按 `Ctrl+T` 新建标签；“打开文件”支持一次选择多个 PDF，拖入文件也会添加标签。点击标签切换，点击 `×`、鼠标中键或按 `Ctrl+W` 关闭；`Ctrl+Tab` / `Ctrl+Shift+Tab` 切换前后标签。各标签保留页码、缩放、搜索、AI 对话和本次高亮撤销历史；保存期间可切换，关闭前需等待保存完成。同一文件在本窗口重复打开会定位到已有标签。
 
 “文件 → 新窗口”或 `Ctrl+N` 可打开独立窗口；“在新窗口打开 PDF…”直接选择另一个文档。各窗口分别保留阅读位置、查找结果、选区和 AI 会话，关闭其中一个不会关闭其他窗口。
 
@@ -49,9 +51,13 @@ Get-FileHash .\fpdf-0.8.3-windows-x64-setup.exe -Algorithm SHA256
 
 双击单词或拖动选择同页多行文字，再点击“高亮标注”；也可先开启工具再连续拖选。`Ctrl+F2` 切换高亮工具，`Esc` 退出。点击或松手后立即显示高亮，文件在后台保存，页面保持可见。
 
+PDF 区域按 `Ctrl+Z` 撤销本次打开文档后添加的高亮，按 `Ctrl+Y` 或 `Ctrl+Shift+Z` 重做；“文件”菜单也提供撤销/重做。即使前一条正在保存，仍可继续标注和撤销，旧保存结果不会恢复已撤销的标注。重新打开文档后开始新的撤销历史。
+
+输入框和对话框保留文字编辑快捷键：`Ctrl+A/C/X/V/Z/Y`、`Ctrl+Shift+Z`、`Ctrl+Home/End`。输入框获得焦点时，撤销操作作用于文字，文档导航不会抢走这些按键。
+
 “标注颜色”保留黄、绿、蓝、粉常用色；选择“自定义颜色…”可点选调色盘、拖动亮度条或输入 RGB（0–255），实时用于后续标注，取消恢复原色。也可添加高亮并另存副本。
 
-高亮保存为标准 PDF Highlight 标注，重新打开或使用其他兼容阅读器时仍可显示。夜间及深色自定义主题保留标注色相。查找高亮不会写入 PDF。加密、含数字签名或被外部修改的 PDF 会停止保存，撤回预览并提示原因；关闭窗口前等待后台保存完成。
+高亮保存为标准 PDF Highlight 标注，重新打开或使用其他兼容阅读器时仍可显示。文字坐标随可见页面缓存，选择和标记不等待保存线程，也不因每条标注而重新渲染整页。夜间及深色自定义主题保留标注色相。查找高亮不会写入 PDF。加密、含数字签名或被外部修改的 PDF 会停止保存，并提示原因；关闭窗口前等待后台保存完成。
 
 ## 文档目录：折叠、改名和页码
 
@@ -69,7 +75,7 @@ Get-FileHash .\fpdf-0.8.3-windows-x64-setup.exe -Algorithm SHA256
 
 ## AI 辅助阅读
 
-无需先打开 PDF，即可点击“连接”测试 API、获取模型列表，或使用“保存并连接”。PDF 总结、翻译及问答仍需先打开文档。0.8.3 已修复未打开文档时连接按钮灰色不可用的问题。
+无需先打开 PDF，即可点击“连接”测试 API、获取模型列表，或使用“保存并连接”。PDF 总结、翻译及问答仍需先打开文档。0.8.4 已修复未打开文档时连接按钮灰色不可用的问题。
 
 AI 使用 pi agent core / pi-ai，默认模型 **GLM-5.3-Flash**。**发布文件不包含作者的 AI 接口地址、密钥或账号**，需要自行配置兼容 OpenAI 的服务。
 
@@ -108,7 +114,10 @@ YOUR_API_KEY
 
 | 快捷键 | 功能 |
 | --- | --- |
-| `Ctrl+O` / `Ctrl+F` | 打开 / 全 PDF 查找 |
+| `Ctrl+O` / `Ctrl+F` | 在标签页打开 PDF / 全 PDF 查找 |
+| `Ctrl+T` / `Ctrl+W` | 新建 / 关闭标签页 |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | 下一个 / 上一个标签页 |
+| `Ctrl+N` | 新窗口 |
 | `Ctrl+F2` | 切换高亮工具；已有选区时立即标注 |
 | `PageUp` / `PageDown` | 上一页 / 下一页 |
 | `Ctrl+Home` / `Ctrl+End` | 首页 / 末页 |

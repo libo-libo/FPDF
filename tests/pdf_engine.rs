@@ -9,6 +9,225 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn wait_for_idle_runtime() {
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Ok(engine) = PdfEngine::new(&library_path().unwrap()) {
+            drop(engine);
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "last reader kept PDFium alive"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+fn shared_reader_sessions_are_isolated() {
+    use worker::{ReaderChannels, RenderTarget, ViewportRequest};
+    let first = worker::spawn_reader(|| {});
+    let second = worker::spawn_reader(|| {});
+    let request = |client: &ReaderChannels, name: &str, page, width| {
+        // Identical request/document ids and render keys in separate clients
+        // must still resolve to that client's own path, document and cache.
+        client
+            .requests
+            .send(ViewportRequest {
+                id: 1,
+                document_id: 1,
+                path: fixture(name),
+                password: String::new(),
+                targets: vec![RenderTarget {
+                    page,
+                    width,
+                    rotation: 0,
+                    thumbnail: false,
+                }],
+            })
+            .unwrap();
+    };
+    request(&first, "reading-demo.pdf", 1, 792);
+    request(&second, "grid-demo.pdf", 1, 792);
+    let a = first
+        .responses
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    let b = second
+        .responses
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    assert_eq!(a.info.unwrap().sizes.len(), 3);
+    assert_eq!(b.info.unwrap().sizes.len(), 16);
+    let a = a.result.unwrap();
+    let b = b.result.unwrap();
+    assert!(a.text.contains("perspective"));
+    assert!(b.text.contains("clearer"));
+    assert_eq!(a.height, 612);
+    assert_ne!(a.height, b.height);
+    assert!(!std::sync::Arc::ptr_eq(&a, &b));
+    for (client, name) in [(&first, "reading-demo.pdf"), (&second, "grid-demo.pdf")] {
+        client
+            .text_requests
+            .send(worker::TextRequest {
+                id: 1,
+                document_id: 1,
+                path: fixture(name),
+                password: String::new(),
+                pages: vec![1],
+            })
+            .unwrap();
+    }
+    assert!(
+        first
+            .text_responses
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .result
+            .unwrap()[0]
+            .text
+            .contains("perspective")
+    );
+    assert!(
+        second
+            .text_responses
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .result
+            .unwrap()[0]
+            .text
+            .contains("clearer")
+    );
+
+    for (client, name) in [(&first, "reading-demo.pdf"), (&second, "grid-demo.pdf")] {
+        client
+            .search_requests
+            .send(worker::SearchRequest {
+                id: 1,
+                document_id: 1,
+                path: fixture(name),
+                password: String::new(),
+                query: "perspective".into(),
+                case_sensitive: false,
+                whole_word: true,
+                rotation: 0,
+            })
+            .unwrap();
+    }
+    let search_pages = |client: &ReaderChannels| {
+        let mut pages = Vec::new();
+        loop {
+            let response = client
+                .search_responses
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap();
+            assert!(response.error.is_none(), "{:?}", response.error);
+            pages.extend(response.matches.into_iter().map(|found| found.page));
+            if response.done {
+                return pages;
+            }
+        }
+    };
+    assert_eq!(search_pages(&first), vec![1]);
+    assert!(search_pages(&second).is_empty());
+
+    let saved = tempfile::tempdir().unwrap();
+    for (client, name, output_name) in [
+        (&first, "reading-demo.pdf", "first.pdf"),
+        (&second, "grid-demo.pdf", "second.pdf"),
+    ] {
+        client
+            .highlight_requests
+            .send(worker::HighlightRequest {
+                id: 1,
+                document_id: 1,
+                path: fixture(name),
+                password: String::new(),
+                marks: Vec::new(),
+                output: saved.path().join(output_name),
+            })
+            .unwrap();
+    }
+    for (client, output_name, pages) in [(&first, "first.pdf", 3), (&second, "second.pdf", 16)] {
+        let response = client
+            .highlight_responses
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        assert!(response.result.is_ok(), "{:?}", response.result);
+        assert_eq!(response.output, saved.path().join(output_name));
+        assert_eq!(
+            lopdf::Document::load(response.output)
+                .unwrap()
+                .get_pages()
+                .len(),
+            pages
+        );
+    }
+
+    // Each image is about 30 MiB. Three independent caches together must
+    // evict the oldest image instead of retaining three 64 MiB budgets.
+    request(&first, "reading-demo.pdf", 0, 2400);
+    let large = first
+        .responses
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .result
+        .unwrap();
+    let evicted = std::sync::Arc::downgrade(&large);
+    drop(large);
+    request(&second, "grid-demo.pdf", 0, 2400);
+    drop(
+        second
+            .responses
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap(),
+    );
+    let third = worker::spawn_reader(|| {});
+    request(&third, "reading-demo.pdf", 2, 2400);
+    drop(
+        third
+            .responses
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap(),
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while evicted.upgrade().is_some() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "global cache cap was not enforced"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    drop(first);
+    request(&second, "grid-demo.pdf", 15, 612);
+    let remaining = second
+        .responses
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    assert_eq!(remaining.info.unwrap().sizes.len(), 16);
+    assert!(remaining.result.unwrap().text.contains("clearer"));
+    drop(second);
+    drop(third);
+    wait_for_idle_runtime();
+
+    // The singleton service thread can initialize a fresh runtime after idle.
+    let restarted = worker::spawn_reader(|| {});
+    request(&restarted, "reading-demo.pdf", 2, 612);
+    assert!(
+        restarted
+            .responses
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .result
+            .unwrap()
+            .text
+            .contains("third and final")
+    );
+    drop(restarted);
+    wait_for_idle_runtime();
+}
+
 fn outline_round_trip(pdf: &mut PdfEngine) {
     use fpdf::outline::OutlineDocument;
     let dir = tempfile::tempdir().unwrap();
@@ -497,6 +716,41 @@ fn real_pdf_loading_rendering_and_worker_lifecycle() {
     let enlarged = pdf.render(0, 1224, 0).unwrap();
     assert_eq!((enlarged.width, enlarged.height), (1224, 1584));
     search_and_highlight_round_trip(&mut pdf);
+    pdf.open(&fixture("reading-demo.pdf"), "").unwrap();
+    for rotation in 0..4 {
+        let image = pdf.render(0, 612, rotation).unwrap();
+        let geometry = image.geometry.as_ref().unwrap();
+        let found = pdf
+            .search_page(0, "clearer", false, true, rotation)
+            .unwrap()
+            .remove(0);
+        let rect = found.rects[0];
+        let point = [
+            f64::from((rect[0] + rect[2]) * 0.5),
+            f64::from((rect[1] + rect[3]) * 0.5),
+        ];
+        let cached = geometry.select(point, point, true).unwrap();
+        let native = pdf.select_word(0, point, rotation).unwrap();
+        assert_eq!(
+            cached.text, native.text,
+            "Cached hit testing must match native words at rotation {rotation}"
+        );
+        assert_eq!(cached.text, "clearer");
+        assert!(!cached.quads.is_empty());
+    }
+    let image = pdf.render(2, 612, 0).unwrap();
+    let selected = image
+        .geometry
+        .as_ref()
+        .unwrap()
+        .select(
+            [50.0 / 612.0, 72.0 / 792.0],
+            [300.0 / 612.0, 127.0 / 792.0],
+            false,
+        )
+        .unwrap();
+    assert!(selected.text.contains("third and final"));
+    assert!(selected.rects.len() >= 2);
     outline_round_trip(&mut pdf);
     assert!(pdf.render(3, 612, 0).is_err());
     assert!(pdf.render(0, 0, 0).is_err());
@@ -818,4 +1072,9 @@ fn real_pdf_loading_rendering_and_worker_lifecycle() {
     assert_eq!(r.target, rotated);
     assert_eq!(r.result.unwrap().height, 612);
     drop(tx);
+    assert!(matches!(
+        rx.recv_timeout(Duration::from_secs(10)),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+    ));
+    shared_reader_sessions_are_isolated();
 }

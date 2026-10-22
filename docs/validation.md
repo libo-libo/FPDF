@@ -1,5 +1,15 @@
 # Validation
 
+## v0.8.4 unified repair — 2026-10-22
+
+- Format and all-target Clippy passed; 37 Rust tests pass, including actual PDF multi-client rendering/search/save isolation, global cache eviction, partial close, last-client runtime release and restart.
+- Native tab smoke clicks real labels and close buttons and sends Ctrl+T/W/Tab/Shift+Tab; checks independent page/zoom/rotation/search/AI state, highlight undo after switching while a deliberately slow save is pending, and close/reopen.
+- Cached hit testing agrees with native text selection in four rotations. Native highlighter smoke deliberately delays persistence for three seconds while continuous selection, immediate ink, undo/redo and unchanged base texture/document IDs are verified. CPU paint submission is not monitor presentation latency.
+- Text editors retain Ctrl+A/C/X/V/Z/Y, Ctrl+Shift+Z and Ctrl+Home/End. Historical v0.8.3 reload behavior below is superseded by independent persistence and a stable UI annotation layer.
+- WPS resource and native-wrapper evidence supports in-memory annotation edits, undo/redo actions and tab/subpage concepts. Exact WPS runtime timing, visual tab ordering and complete save implementation remain unobserved.
+- Whole-document search/AI coexistence, independent windows, continuous reading, RGB palettes and uninstall cancellation passed again after tabs were integrated. All three AI bridge tests passed.
+- The installed v0.8.4 ran the real tab/undo workflow; all 110 installed payload hashes matched distribution. Uninstall removed owned files/settings and preserved a user PDF. The six-page manual was rendered and visually checked; source, installer, PDF and ZIP passed private endpoint/key/token scanning.
+
 ## v0.8.3 highlight interaction repair — 2026-10-22
 
 - Format/Clippy passed; 31 Rust tests and 3 AI bridge tests passed. Actual saved annotation pixels have visible contrast inside the selected text region in white, night, green, warm and dark custom RGB themes.

@@ -3,11 +3,69 @@ use crate::pdf::PdfSelection;
 use lopdf::{Document, Object, Stream, StringFormat, dictionary};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+#[derive(Clone, Debug)]
+pub struct HighlightMark {
+    pub selection: PdfSelection,
+    pub rotation: u8,
+    pub color: [u8; 3],
+}
+
+#[derive(Default)]
+pub struct HighlightHistory {
+    commands: Vec<Arc<HighlightMark>>,
+    cursor: usize,
+}
+impl HighlightHistory {
+    pub fn add(&mut self, mark: HighlightMark) -> Result<(), String> {
+        if self.cursor >= 512 {
+            return Err("本次文档会话最多添加 512 条高亮，请重新打开后继续。".into());
+        }
+        self.commands.truncate(self.cursor);
+        self.commands.push(Arc::new(mark));
+        self.cursor += 1;
+        Ok(())
+    }
+    pub fn undo(&mut self) -> bool {
+        if self.cursor == 0 {
+            false
+        } else {
+            self.cursor -= 1;
+            true
+        }
+    }
+    pub fn redo(&mut self) -> bool {
+        if self.cursor == self.commands.len() {
+            false
+        } else {
+            self.cursor += 1;
+            true
+        }
+    }
+    pub fn can_undo(&self) -> bool {
+        self.cursor > 0
+    }
+    pub fn can_redo(&self) -> bool {
+        self.cursor < self.commands.len()
+    }
+    pub fn marks(&self) -> Vec<Arc<HighlightMark>> {
+        self.commands[..self.cursor].to_vec()
+    }
+    pub fn active(&self) -> &[Arc<HighlightMark>] {
+        &self.commands[..self.cursor]
+    }
+    pub fn restore(&mut self, marks: Vec<Arc<HighlightMark>>) {
+        self.cursor = marks.len();
+        self.commands = marks;
+    }
+}
+
+#[derive(Clone)]
 pub struct HighlightDocument {
     document: Document,
     source: PathBuf,
-    original: Vec<u8>,
+    original: Arc<Vec<u8>>,
 }
 fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
@@ -42,7 +100,9 @@ fn unchanged(path: &Path, expected: &[u8]) -> Result<bool, String> {
 }
 impl HighlightDocument {
     pub fn load(path: &Path) -> Result<Self, String> {
-        let original = read_bounded(path)?;
+        Self::from_snapshot(path, Arc::new(read_bounded(path)?))
+    }
+    pub fn from_snapshot(path: &Path, original: Arc<Vec<u8>>) -> Result<Self, String> {
         let document = Document::load_mem(&original).map_err(|e| format!("无法读取 PDF：{e}"))?;
         if document.is_encrypted() || document.was_encrypted() {
             return Err("加密 PDF 暂不支持保存高亮。".into());
@@ -64,7 +124,7 @@ impl HighlightDocument {
         })
     }
     pub fn matches_source(&self, bytes: &[u8]) -> bool {
-        self.original == bytes
+        self.original.as_slice() == bytes
     }
 
     pub fn add_selection(
@@ -162,7 +222,16 @@ impl HighlightDocument {
         Ok(())
     }
     pub fn save(&self, output: &Path) -> Result<(), String> {
-        if !unchanged(&self.source, &self.original)? {
+        self.save_checked(output, &self.source, &self.original)
+            .map(|_| ())
+    }
+    pub fn save_checked(
+        &self,
+        output: &Path,
+        identity_path: &Path,
+        expected: &[u8],
+    ) -> Result<Arc<Vec<u8>>, String> {
+        if !unchanged(identity_path, expected)? {
             return Err("原 PDF 已被其他程序修改，请重新打开后再保存。".into());
         }
         let parent = output
@@ -180,17 +249,52 @@ impl HighlightDocument {
             return Err("保存后的 PDF 页数发生变化。".into());
         }
         // Recheck immediately before replacement, after serialization and validation.
-        if !unchanged(&self.source, &self.original)? {
+        let serialized = Arc::new(read_bounded(temp.path())?);
+        if !unchanged(identity_path, expected)? {
             return Err("原 PDF 在保存过程中被修改，已取消保存。".into());
         }
         temp.persist(output)
             .map_err(|e| format!("无法替换目标文件：{}", e.error))?;
-        Ok(())
+        Ok(serialized)
     }
 }
 #[cfg(test)]
 mod tests {
-    use super::unchanged;
+    use super::*;
+
+    #[test]
+    fn highlight_history_undo_redo_and_new_edit_preserve_command_identity() {
+        let mark = |text: &str| HighlightMark {
+            selection: PdfSelection {
+                page: 0,
+                text: text.into(),
+                context: String::new(),
+                rects: vec![[0.1, 0.1, 0.2, 0.2]],
+                quads: vec![[10.0, 20.0, 20.0, 20.0, 10.0, 10.0, 20.0, 10.0]],
+                truncated: false,
+            },
+            rotation: 0,
+            color: [255, 230, 70],
+        };
+        let mut history = HighlightHistory::default();
+        history.add(mark("first")).unwrap();
+        let first = history.marks()[0].clone();
+        history.add(mark("second")).unwrap();
+        assert!(history.undo());
+        assert_eq!(history.active().len(), 1);
+        assert!(history.redo());
+        assert_eq!(history.active()[1].selection.text, "second");
+        history.undo();
+        history.add(mark("replacement")).unwrap();
+        assert!(!history.can_redo());
+        assert!(Arc::ptr_eq(&first, &history.active()[0]));
+        history.undo();
+        history.undo();
+        assert!(!history.undo());
+        assert!(history.active().is_empty());
+        assert!(history.redo());
+        assert!(Arc::ptr_eq(&first, &history.active()[0]));
+    }
 
     #[test]
     fn streaming_identity_detects_content_size_and_tail_changes() {

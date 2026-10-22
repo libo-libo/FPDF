@@ -26,6 +26,7 @@ pub struct TextSelection {
     pub action: Option<TranslationAction>,
     pub auto_translation: Option<bool>,
     pub highlight_color: Option<[u8; 3]>,
+    pub committed: bool,
     start: Option<(u32, [f64; 2])>,
     rotation: u8,
     last_sample: Option<(Instant, [f64; 2])>,
@@ -49,6 +50,7 @@ impl TextSelection {
         rect: Rect,
         page: u32,
         rotation: u8,
+        geometry: Option<&fpdf::reading::TextGeometry>,
     ) -> egui::Response {
         self.set_rotation(rotation);
         let response = ui.interact(
@@ -119,6 +121,22 @@ impl TextSelection {
                 }
             } else if response.drag_stopped() {
                 self.start = None;
+            }
+        }
+        if let Some(geometry) =
+            geometry.filter(|g| g.page == page && g.rotation == rotation && !g.truncated)
+            && let Some(gesture) = self.pending.take()
+        {
+            self.invalidate = true;
+            match geometry.select(gesture.start, gesture.end, gesture.word) {
+                Ok(selection) => {
+                    self.current = Some(selection);
+                    self.committed |= gesture.committed;
+                    self.notice.clear();
+                }
+                Err(error) => {
+                    self.notice = error;
+                }
             }
         }
         if let Some(selection) = &self.current

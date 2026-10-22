@@ -1,4 +1,144 @@
 //! Pure reading layout, navigation history, and display color transforms.
+
+#[derive(Clone, Debug)]
+pub struct TextGlyph {
+    pub character: char,
+    pub rect: [f32; 4],
+    pub quad: [f64; 8],
+}
+pub fn rotate_text_rect(mut rect: [f32; 4], from: u8, to: u8) -> [f32; 4] {
+    for _ in 0..((to + 4 - from) % 4) {
+        rect = [1.0 - rect[3], rect[0], 1.0 - rect[1], rect[2]];
+    }
+    rect
+}
+#[derive(Clone, Debug)]
+pub struct TextGeometry {
+    pub page: u32,
+    pub rotation: u8,
+    pub points: [f32; 2],
+    pub glyphs: Vec<TextGlyph>,
+    pub truncated: bool,
+}
+impl TextGeometry {
+    pub fn bytes(&self) -> usize {
+        self.glyphs.len() * std::mem::size_of::<TextGlyph>()
+    }
+    pub fn select(
+        &self,
+        start: [f64; 2],
+        end: [f64; 2],
+        word: bool,
+    ) -> Result<crate::pdf::PdfSelection, String> {
+        if start.into_iter().chain(end).any(|v| !v.is_finite()) {
+            return Err("选区坐标无效。".into());
+        }
+        let at = |point: [f64; 2], snap: bool| -> Option<usize> {
+            let mut best: Option<(usize, f64)> = None;
+            for (index, glyph) in self.glyphs.iter().enumerate() {
+                let [l, t, r, b] = glyph.rect;
+                if glyph.character.is_whitespace() || r <= l || b <= t {
+                    continue;
+                }
+                let x = point[0].clamp(0.0, 1.0);
+                let y = point[1].clamp(0.0, 1.0);
+                let dx = (x - f64::from(l)).min(0.0).abs() + (x - f64::from(r)).max(0.0);
+                let dy = (y - f64::from(t)).min(0.0).abs() + (y - f64::from(b)).max(0.0);
+                let dx = dx * f64::from(self.points[0]);
+                let dy = dy * f64::from(self.points[1]);
+                if dy > 12.0 || (!snap && dx > 12.0) {
+                    continue;
+                }
+                let distance = dy * dy * 100.0 + dx * dx;
+                if best.is_none_or(|(_, previous)| distance < previous) {
+                    best = Some((index, distance));
+                }
+            }
+            best.map(|(index, _)| index)
+        };
+        let Some(mut first) = at(start, false) else {
+            return Err("请从文字处开始选取；扫描页需要 OCR。".into());
+        };
+        let Some(mut last) = at(if word { start } else { end }, true) else {
+            return Err("选区没有文字。".into());
+        };
+        let is_word = |index: usize| {
+            let ch = self.glyphs[index].character;
+            ch.is_alphanumeric() || matches!(ch, '_' | '\'' | '’' | '-')
+        };
+        if word && is_word(first) {
+            while first > 0 && last - first < 7999 && is_word(first - 1) {
+                first -= 1;
+            }
+            while last + 1 < self.glyphs.len() && last - first < 7999 && is_word(last + 1) {
+                last += 1;
+            }
+        }
+        let begin = first.min(last);
+        let finish = (first.max(last) + 1).min(begin + 8000);
+        let text: String = self.glyphs[begin..finish]
+            .iter()
+            .map(|g| g.character)
+            .collect();
+        if text.trim().is_empty() {
+            return Err("选区没有文字。".into());
+        }
+        let mut rects: Vec<[f32; 4]> = Vec::new();
+        let mut quads: Vec<[f64; 8]> = Vec::new();
+        for glyph in &self.glyphs[begin..finish] {
+            if glyph.character.is_whitespace()
+                || glyph.rect[2] <= glyph.rect[0]
+                || glyph.rect[3] <= glyph.rect[1]
+            {
+                continue;
+            }
+            let q = glyph.quad;
+            let merge = quads.last().is_some_and(|previous| {
+                let overlap = previous[1].min(q[1]) - previous[5].max(q[5]);
+                overlap > 0.4 * (previous[1] - previous[5]).min(q[1] - q[5])
+                    && q[0] <= previous[2] + 18.0
+                    && q[2] >= previous[0] - 18.0
+            });
+            if merge {
+                let previous = quads.last_mut().unwrap();
+                let l = previous[0].min(q[0]);
+                let r = previous[2].max(q[2]);
+                let t = previous[1].max(q[1]);
+                let b = previous[5].min(q[5]);
+                *previous = [l, t, r, t, l, b, r, b];
+                let rect = rects.last_mut().unwrap();
+                *rect = [
+                    rect[0].min(glyph.rect[0]),
+                    rect[1].min(glyph.rect[1]),
+                    rect[2].max(glyph.rect[2]),
+                    rect[3].max(glyph.rect[3]),
+                ];
+            } else {
+                quads.push(q);
+                rects.push(glyph.rect);
+            }
+        }
+        if quads.len() > 256 {
+            return Err("单次选区跨越的文本行过多，请分段标注。".into());
+        }
+        let before: String = self.glyphs[begin.saturating_sub(1500)..begin]
+            .iter()
+            .map(|g| g.character)
+            .collect();
+        let after: String = self.glyphs[finish..(finish + 1500).min(self.glyphs.len())]
+            .iter()
+            .map(|g| g.character)
+            .collect();
+        Ok(crate::pdf::PdfSelection {
+            page: self.page,
+            text,
+            context: format!("选区前文：\n{before}\n选区后文：\n{after}"),
+            rects,
+            quads,
+            truncated: finish < first.max(last) + 1 || self.truncated,
+        })
+    }
+}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ReadingMode {
     Single,

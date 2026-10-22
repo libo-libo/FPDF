@@ -4,6 +4,7 @@ use libloading::Library;
 use std::ffi::{CString, c_char, c_int, c_ulong, c_void};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{fs, marker::PhantomData};
 
@@ -80,6 +81,8 @@ struct Api {
     text_load: unsafe extern "system" fn(Handle) -> Handle,
     text_count: unsafe extern "system" fn(Handle) -> c_int,
     text_unicode: unsafe extern "system" fn(Handle, c_int) -> u32,
+    text_char_box:
+        unsafe extern "system" fn(Handle, c_int, *mut f64, *mut f64, *mut f64, *mut f64) -> c_int,
     text_get: unsafe extern "system" fn(Handle, c_int, c_int, *mut u16) -> c_int,
     text_close: unsafe extern "system" fn(Handle),
     find_start: unsafe extern "system" fn(Handle, *const u16, c_ulong, c_int) -> Handle,
@@ -158,6 +161,7 @@ impl Api {
                 text_load: sym!("FPDFText_LoadPage"),
                 text_count: sym!("FPDFText_CountChars"),
                 text_unicode: sym!("FPDFText_GetUnicode"),
+                text_char_box: sym!("FPDFText_GetCharBox"),
                 text_get: sym!("FPDFText_GetText"),
                 text_close: sym!("FPDFText_ClosePage"),
                 find_start: sym!("FPDFText_FindStart"),
@@ -179,14 +183,14 @@ impl Api {
 struct Document {
     handle: Handle,
     // PDFium borrows this allocation until FPDF_CloseDocument.
-    _bytes: Vec<u8>,
+    _bytes: Arc<Vec<u8>>,
     pages: u32,
 }
 
-/// Exactly one engine is created inside the render worker. !Send + !Sync keeps
-/// PDFium calls, document destruction, and library teardown on that one thread.
+/// All engines share one owner thread. !Send + !Sync keeps PDFium calls,
+/// document destruction, and final library teardown on that same thread.
 pub struct PdfEngine {
-    api: Api,
+    api: Rc<Api>,
     document: Option<Document>,
     _thread_confined: PhantomData<Rc<()>>,
 }
@@ -199,6 +203,12 @@ pub struct PageImage {
     pub points: [f32; 2],
     pub text: String,
     pub text_truncated: bool,
+    pub geometry: Option<Arc<crate::reading::TextGeometry>>,
+}
+impl PageImage {
+    pub fn bytes(&self) -> usize {
+        self.rgba.len() + self.geometry.as_ref().map_or(0, |g| g.bytes())
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -290,10 +300,20 @@ impl PdfEngine {
             (api.init)();
         }
         Ok(Self {
-            api,
+            api: Rc::new(api),
             document: None,
             _thread_confined: PhantomData,
         })
+    }
+
+    /// An empty document session sharing this thread's initialized runtime.
+    /// Rc deliberately prevents transferring either session to another thread.
+    pub(crate) fn fork_empty(&self) -> Self {
+        Self {
+            api: self.api.clone(),
+            document: None,
+            _thread_confined: PhantomData,
+        }
     }
 
     pub fn open(&mut self, path: &Path, password: &str) -> Result<u32, PdfError> {
@@ -338,7 +358,7 @@ impl PdfEngine {
         self.close();
         self.document = Some(Document {
             handle,
-            _bytes: bytes,
+            _bytes: Arc::new(bytes),
             pages: pages as u32,
         });
         Ok(pages as u32)
@@ -515,10 +535,89 @@ impl PdfEngine {
                 points,
                 text,
                 text_truncated,
+                geometry: (width >= 256)
+                    .then(|| self.page_geometry(page, index, rotation, [pw, ph]))
+                    .flatten()
+                    .map(Arc::new),
             })
         }
     }
 
+    fn page_geometry(
+        &self,
+        handle: Handle,
+        page: u32,
+        rotation: u8,
+        points: [f32; 2],
+    ) -> Option<crate::reading::TextGeometry> {
+        // Only owned, numeric geometry crosses to the UI; all PDFium handles
+        // remain on this worker and close before the document does.
+        unsafe {
+            let text = (self.api.text_load)(handle);
+            if text.is_null() {
+                return None;
+            }
+            let _text = Guard {
+                handle: text,
+                close: self.api.text_close,
+            };
+            let count = (self.api.text_count)(text).max(0);
+            let mut glyphs = Vec::with_capacity(count.min(20000) as usize);
+            for index in 0..count.min(20000) {
+                let character =
+                    char::from_u32((self.api.text_unicode)(text, index)).unwrap_or('\u{fffd}');
+                let (mut l, mut r, mut b, mut t) = (0.0, 0.0, 0.0, 0.0);
+                let mut rect = [0.0; 4];
+                if (self.api.text_char_box)(text, index, &mut l, &mut r, &mut b, &mut t) != 0
+                    && r > l
+                    && t > b
+                {
+                    let (mut lx, mut ly, mut rx, mut ry) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+                    for (x, y) in [(l, t), (r, t), (l, b), (r, b)] {
+                        let (mut dx, mut dy) = (0, 0);
+                        if (self.api.page_to_device)(
+                            handle,
+                            0,
+                            0,
+                            10000,
+                            10000,
+                            rotation as c_int,
+                            x,
+                            y,
+                            &mut dx,
+                            &mut dy,
+                        ) != 0
+                        {
+                            lx = lx.min(dx);
+                            ly = ly.min(dy);
+                            rx = rx.max(dx);
+                            ry = ry.max(dy);
+                        }
+                    }
+                    if rx >= lx && ry >= ly {
+                        rect = [
+                            lx as f32 / 10000.0,
+                            ly as f32 / 10000.0,
+                            rx as f32 / 10000.0,
+                            ry as f32 / 10000.0,
+                        ];
+                    }
+                }
+                glyphs.push(crate::reading::TextGlyph {
+                    character,
+                    rect,
+                    quad: [l, t, r, t, l, b, r, b],
+                });
+            }
+            Some(crate::reading::TextGeometry {
+                page,
+                rotation,
+                points,
+                glyphs,
+                truncated: count > 20000,
+            })
+        }
+    }
     pub fn read_text(&self, page: u32) -> Result<PageText, PdfError> {
         let doc = self
             .document
@@ -746,6 +845,13 @@ impl PdfEngine {
             .ok_or_else(|| PdfError::new("请先打开 PDF。"))
     }
 
+    pub fn source_snapshot(&self) -> Result<Arc<Vec<u8>>, PdfError> {
+        self.document
+            .as_ref()
+            .map(|d| d._bytes.clone())
+            .ok_or_else(|| PdfError::new("请先打开 PDF。"))
+    }
+
     /// Searches one page on the PDFium-owning thread; the scheduler yields between pages.
     pub fn search_page(
         &self,
@@ -919,10 +1025,13 @@ impl Drop for Guard {
 impl Drop for PdfEngine {
     fn drop(&mut self) {
         self.close();
-        unsafe {
-            (self.api.destroy)();
+        if Rc::strong_count(&self.api) == 1 {
+            // SAFETY: Every document session has closed on this owner thread.
+            unsafe {
+                (self.api.destroy)();
+            }
+            ENGINE_ACTIVE.store(false, Ordering::Release);
         }
-        ENGINE_ACTIVE.store(false, Ordering::Release);
     }
 }
 
