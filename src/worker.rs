@@ -693,7 +693,7 @@ fn spawn_highlight_saver() -> (mpsc::Sender<SaveJob>, mpsc::Receiver<HighlightRe
                     let state = saved.as_mut().unwrap();
                     let mut document = state.base.clone();
                     for mark in &request.marks {
-                        document.add_selection(&mark.selection, mark.rotation, mark.color)?;
+                        document.add_markup(&mark.selection, mark.color, mark.kind)?;
                     }
                     let bytes =
                         document.save_checked(&request.output, &state.path, &state.expected)?;
@@ -735,6 +735,7 @@ mod save_tests {
         let path = dir.path().join("editable.pdf");
         std::fs::write(&path, &*original).unwrap();
         let mark = Arc::new(crate::annotation::HighlightMark {
+            kind: crate::annotation::MarkKind::Highlight,
             selection: PdfSelection {
                 page: 0,
                 text: "first".into(),

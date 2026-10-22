@@ -5,8 +5,16 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MarkKind {
+    #[default]
+    Highlight,
+    Underline,
+}
+
 #[derive(Clone, Debug)]
 pub struct HighlightMark {
+    pub kind: MarkKind,
     pub selection: PdfSelection,
     pub rotation: u8,
     pub color: [u8; 3],
@@ -133,6 +141,15 @@ impl HighlightDocument {
         _rotation: u8,
         color: [u8; 3],
     ) -> Result<(), String> {
+        self.add_markup(selection, color, MarkKind::Highlight)
+    }
+
+    pub fn add_markup(
+        &mut self,
+        selection: &PdfSelection,
+        color: [u8; 3],
+        kind: MarkKind,
+    ) -> Result<(), String> {
         if selection.quads.is_empty()
             || selection.quads.len() > 256
             || selection
@@ -181,9 +198,27 @@ impl HighlightDocument {
         if right <= left || top <= bottom {
             return Err("高亮选区面积无效。".into());
         }
+        // Leave space for the underline stroke at the bottom of the quad.
+        left -= 1.0;
+        bottom -= 1.0;
+        right += 1.0;
+        top += 1.0;
         let rgb = color.map(|c| f32::from(c) / 255.0);
         let mut content = format!("q /GS0 gs {} {} {} rg\n", rgb[0], rgb[1], rgb[2]);
         for q in &selection.quads {
+            if kind == MarkKind::Underline {
+                content.push_str(&format!(
+                    "{} {} {} RG 0.9 w {} {} m {} {} l S\n",
+                    rgb[0],
+                    rgb[1],
+                    rgb[2],
+                    q[4] - left,
+                    q[5] - bottom,
+                    q[6] - left,
+                    q[7] - bottom
+                ));
+                continue;
+            }
             content.push_str(&format!(
                 "{} {} m {} {} l {} {} l {} {} l h f\n",
                 q[0] - left,
@@ -197,7 +232,12 @@ impl HighlightDocument {
             ));
         }
         content.push_str("Q\n");
-        let resources = dictionary! {"ExtGState"=>dictionary!{"GS0"=>dictionary!{"Type"=>"ExtGState","ca"=>0.35f32,"CA"=>0.35f32,"BM"=>"Multiply"}}};
+        let opacity = if kind == MarkKind::Underline {
+            1.0f32
+        } else {
+            0.35f32
+        };
+        let resources = dictionary! {"ExtGState"=>dictionary!{"GS0"=>dictionary!{"Type"=>"ExtGState","ca"=>opacity,"CA"=>opacity,"BM"=>"Multiply"}}};
         let appearance=self.document.add_object(Stream::new(dictionary!{"Type"=>"XObject","Subtype"=>"Form","FormType"=>1,"BBox"=>vec![0.into(),0.into(),Object::Real((right-left) as f32),Object::Real((top-bottom) as f32)],"Resources"=>resources},content.into_bytes()));
         let quad_points: Vec<Object> = selection
             .quads
@@ -210,8 +250,8 @@ impl HighlightDocument {
             .map(|v| Object::Real(v as f32))
             .collect();
         let annotation=self.document.add_object(dictionary!{
-            "Type"=>"Annot","Subtype"=>"Highlight","P"=>page,"Rect"=>rect,"QuadPoints"=>quad_points,
-            "C"=>rgb.into_iter().map(Object::Real).collect::<Vec<_>>(),"CA"=>0.35f32,"F"=>4,
+            "Type"=>"Annot","Subtype"=>if kind == MarkKind::Underline {"Underline"} else {"Highlight"},"P"=>page,"Rect"=>rect,"QuadPoints"=>quad_points,
+            "C"=>rgb.into_iter().map(Object::Real).collect::<Vec<_>>(),"CA"=>opacity,"F"=>4,
             "Contents"=>Object::String(std::iter::once(0xFEFFu16).chain(selection.text.encode_utf16()).flat_map(u16::to_be_bytes).collect(), StringFormat::Hexadecimal),"AP"=>dictionary!{"N"=>appearance},
         });
         annots.push(annotation.into());
@@ -265,6 +305,7 @@ mod tests {
     #[test]
     fn highlight_history_undo_redo_and_new_edit_preserve_command_identity() {
         let mark = |text: &str| HighlightMark {
+            kind: MarkKind::Highlight,
             selection: PdfSelection {
                 page: 0,
                 text: text.into(),

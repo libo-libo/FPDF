@@ -2,21 +2,21 @@
 
 Windows x64 PDF 阅读器，使用 Rust 编写。支持连续阅读、目录编辑、夜间与护眼模式，以及基于 pi agent 的 AI 辅助阅读。PDF 解析使用独立 PDFium，无需安装 WPS。
 
-[下载最新版](https://github.com/libo-libo/FPDF/releases/latest) · [中文 PDF 使用说明](https://github.com/libo-libo/FPDF/releases/download/v0.8.4/fpdf-0.8.4-user-guide-zh-CN.pdf) · [更新记录](https://github.com/libo-libo/FPDF/blob/main/CHANGELOG.md)
+[下载最新版](https://github.com/libo-libo/FPDF/releases/latest) · [中文 PDF 使用说明](https://github.com/libo-libo/FPDF/releases/download/v0.8.5/fpdf-0.8.5-user-guide-zh-CN.pdf) · [更新记录](https://github.com/libo-libo/FPDF/blob/main/CHANGELOG.md)
 
 ![夜间模式与目录页码](https://raw.githubusercontent.com/libo-libo/FPDF/main/docs/fpdf-outline-pages-preview.png)
 
 ## 从 GitHub 下载和安装
 
 1. 打开 [FPDF 仓库](https://github.com/libo-libo/FPDF)，点击右侧 **Releases**；也可以直接打开[版本下载页](https://github.com/libo-libo/FPDF/releases/latest)。
-2. 进入最新版本（当前 **v0.8.4**），展开下方 **Assets**。点击文件名下载，无需 Git 或 GitHub 账号。
+2. 进入最新版本（当前 **v0.8.5**），展开下方 **Assets**。点击文件名下载，无需 Git 或 GitHub 账号。
 3. 选择下面的安装程序或免安装包。`Source code (zip)` / `Source code (tar.gz)` 是开发用源码，不能直接作为阅读器运行。
 
 | 文件 | 使用方法 |
 | --- | --- |
-| `fpdf-0.8.4-windows-x64-setup.exe` | 双击，按向导安装到当前用户目录，创建开始菜单快捷方式；可在 Windows 设置中卸载。 |
-| `fpdf-0.8.4-windows-x64.zip` | 右键 → 全部解压，再打开解压目录中的 `fpdf.exe`。 |
-| `fpdf-0.8.4-user-guide-zh-CN.pdf` | 中文使用说明，包含下载、阅读、目录编辑和 AI 翻译。 |
+| `fpdf-0.8.5-windows-x64-setup.exe` | 双击，按向导安装到当前用户目录，创建开始菜单快捷方式；可在 Windows 设置中卸载。 |
+| `fpdf-0.8.5-windows-x64.zip` | 右键 → 全部解压，再打开解压目录中的 `fpdf.exe`。 |
+| `fpdf-0.8.5-user-guide-zh-CN.pdf` | 中文使用说明，包含下载、阅读、目录编辑和 AI 翻译。 |
 | `SHA256SUMS.txt` | 下载校验值，使用以下命令核对。 |
 
 要求 Windows 10/11 x64。发行包自带 PDFium 与 AI 所需的 Node.js，无需安装 Rust、Node.js 或开发工具。**保留整个程序目录**，包括 `pdfium.dll`、`ai/` 和许可证，不能只复制 `fpdf.exe`。当前安装程序未做代码签名。
@@ -24,12 +24,12 @@ Windows x64 PDF 阅读器，使用 Rust 编写。支持连续阅读、目录编�
 在 PowerShell 中计算文件 SHA-256，与同版本的 `SHA256SUMS.txt` 对照：
 
 ```powershell
-Get-FileHash .\fpdf-0.8.4-windows-x64-setup.exe -Algorithm SHA256
+Get-FileHash .\fpdf-0.8.5-windows-x64-setup.exe -Algorithm SHA256
 ```
 
 升级前关闭旧版，再运行新安装程序；免安装版建议解压到新目录。自行创建的 AI 配置建议放在 `%APPDATA%/fpdf/agent.txt`，便于升级保留。
 
-0.8.4 修正版补充了 Windows P 图标、应用内 API 配置和一键卸载入口。安装版可从“文件 → 卸载 fpdf（清除全部配置）”或开始菜单同名入口确认后移除程序及其保存的 AI 配置、主题、缓存和日志；保留用户 PDF。Windows 设置的“已安装的应用”也支持卸载。
+0.8.5 修正版补充了 Windows P 图标、应用内 API 配置和一键卸载入口。安装版可从“文件 → 卸载 fpdf（清除全部配置）”或开始菜单同名入口确认后移除程序及其保存的 AI 配置、主题、缓存和日志；保留用户 PDF。Windows 设置的“已安装的应用”也支持卸载。
 
 ## 基本阅读
 
@@ -45,9 +45,12 @@ Get-FileHash .\fpdf-0.8.4-windows-x64-setup.exe -Algorithm SHA256
 - 顶部及底部均有缩小 / 放大；百分比支持输入 **10%–500%** 后按 Enter，也可拖动滑块或使用 `Ctrl+滚轮`。
 - “实际大小”为 100%；“适合宽度”随窗口调整，“适合页面”完整显示当前页；旋转每次 90°。
 - 连续模式缩小后按可用宽度自动显示每行 **2、4、8 页**；放大恢复单列。点击小页面选为当前页。单页模式始终显示一页。
+- PDF 正文目录中带内部链接的章节可直接点击跳转，支持直接目标和命名目标；悬停显示手形和目标页码。点击顶部“后退”或按 `Alt+←` 返回原页和滚动位置，`Alt+→` 前进。普通文字及扫描目录若未嵌入链接，不会自动变成跳转项。
 - `Ctrl+F` 或“全文搜索”在整个 PDF 中查找，右侧显示页码、上下文片段和进度；点击结果定位，支持上一个/下一个、区分大小写与全词匹配。页面中的命中为黄色，当前结果为橙色。“文本面板”仍可复制当前页文字。
 
-## 文本高亮标注
+## 高亮与下划线标注
+
+点击“下划线”可给选中文字添加下划线，也可先开启工具再连续拖选；`Ctrl+Shift+U` 切换，`Esc` 退出。高亮和下划线分别保留颜色，当前工具的“标注颜色 → 自定义颜色…”提供调色盘、亮度和 RGB；两者均支持保存、另存副本、`Ctrl+Z` 撤销及重做。
 
 双击单词或拖动选择同页多行文字，再点击“高亮标注”；也可先开启工具再连续拖选。`Ctrl+F2` 切换高亮工具，`Esc` 退出。点击或松手后立即显示高亮，文件在后台保存，页面保持可见。
 
@@ -75,7 +78,7 @@ PDF 区域按 `Ctrl+Z` 撤销本次打开文档后添加的高亮，按 `Ctrl+Y`
 
 ## AI 辅助阅读
 
-无需先打开 PDF，即可点击“连接”测试 API、获取模型列表，或使用“保存并连接”。PDF 总结、翻译及问答仍需先打开文档。0.8.4 已修复未打开文档时连接按钮灰色不可用的问题。
+无需先打开 PDF，即可点击“连接”测试 API、获取模型列表，或使用“保存并连接”。PDF 总结、翻译及问答仍需先打开文档。0.8.5 已修复未打开文档时连接按钮灰色不可用的问题。
 
 AI 使用 pi agent core / pi-ai，默认模型 **GLM-5.3-Flash**。**发布文件不包含作者的 AI 接口地址、密钥或账号**，需要自行配置兼容 OpenAI 的服务。
 
@@ -118,6 +121,7 @@ YOUR_API_KEY
 | `Ctrl+T` / `Ctrl+W` | 新建 / 关闭标签页 |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 下一个 / 上一个标签页 |
 | `Ctrl+N` | 新窗口 |
+| `Ctrl+Shift+U` | 切换下划线工具；已有选区时立即标注 |
 | `Ctrl+F2` | 切换高亮工具；已有选区时立即标注 |
 | `PageUp` / `PageDown` | 上一页 / 下一页 |
 | `Ctrl+Home` / `Ctrl+End` | 首页 / 末页 |

@@ -8,6 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{fs, marker::PhantomData};
 
+mod links;
+pub use links::{PdfDestination, PdfLink};
+
 type Handle = *mut c_void;
 #[repr(C)]
 #[derive(Default)]
@@ -67,6 +70,20 @@ struct Api {
     bookmark_action: unsafe extern "system" fn(Handle) -> Handle,
     action_type: unsafe extern "system" fn(Handle) -> c_ulong,
     action_dest: unsafe extern "system" fn(Handle, Handle) -> Handle,
+    link_enumerate: unsafe extern "system" fn(Handle, *mut c_int, *mut Handle) -> c_int,
+    link_dest: unsafe extern "system" fn(Handle, Handle) -> Handle,
+    link_action: unsafe extern "system" fn(Handle) -> Handle,
+    link_rect: unsafe extern "system" fn(Handle, *mut links::RectF) -> c_int,
+    dest_view: unsafe extern "system" fn(Handle, *mut c_ulong, *mut f32) -> c_ulong,
+    dest_location: unsafe extern "system" fn(
+        Handle,
+        *mut c_int,
+        *mut c_int,
+        *mut c_int,
+        *mut f32,
+        *mut f32,
+        *mut f32,
+    ) -> c_int,
     dest_page: unsafe extern "system" fn(Handle, Handle) -> c_int,
     load_page: unsafe extern "system" fn(Handle, c_int) -> Handle,
     close_page: unsafe extern "system" fn(Handle),
@@ -147,6 +164,12 @@ impl Api {
                 bookmark_action: sym!("FPDFBookmark_GetAction"),
                 action_type: sym!("FPDFAction_GetType"),
                 action_dest: sym!("FPDFAction_GetDest"),
+                link_enumerate: sym!("FPDFLink_Enumerate"),
+                link_dest: sym!("FPDFLink_GetDest"),
+                link_action: sym!("FPDFLink_GetAction"),
+                link_rect: sym!("FPDFLink_GetAnnotRect"),
+                dest_view: sym!("FPDFDest_GetView"),
+                dest_location: sym!("FPDFDest_GetLocationInPage"),
                 dest_page: sym!("FPDFDest_GetDestPageIndex"),
                 load_page: sym!("FPDF_LoadPage"),
                 close_page: sym!("FPDF_ClosePage"),
@@ -204,10 +227,13 @@ pub struct PageImage {
     pub text: String,
     pub text_truncated: bool,
     pub geometry: Option<Arc<crate::reading::TextGeometry>>,
+    pub links: Vec<PdfLink>,
 }
 impl PageImage {
     pub fn bytes(&self) -> usize {
-        self.rgba.len() + self.geometry.as_ref().map_or(0, |g| g.bytes())
+        self.rgba.len()
+            + self.links.len() * std::mem::size_of::<PdfLink>()
+            + self.geometry.as_ref().map_or(0, |g| g.bytes())
     }
 }
 
@@ -535,6 +561,7 @@ impl PdfEngine {
                 points,
                 text,
                 text_truncated,
+                links: self.page_links(doc, page, rotation),
                 geometry: (width >= 256)
                     .then(|| self.page_geometry(page, index, rotation, [pw, ph]))
                     .flatten()
@@ -609,7 +636,17 @@ impl PdfEngine {
                     quad: [l, t, r, t, l, b, r, b],
                 });
             }
+            let origin = self.page_point(handle, rotation, 0.0, 0.0)?;
+            let x = self.page_point(handle, rotation, 10000.0, 0.0)?;
+            let y = self.page_point(handle, rotation, 0.0, 10000.0)?;
             Some(crate::reading::TextGeometry {
+                page_transform: [0, 1].map(|i| {
+                    [
+                        (x[i] - origin[i]) / 10000.0,
+                        (y[i] - origin[i]) / 10000.0,
+                        origin[i],
+                    ]
+                }),
                 page,
                 rotation,
                 points,

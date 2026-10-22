@@ -64,8 +64,23 @@ try {
     & $IsccPath "/DAppVersion=$taskVersion" './installer/fpdf.iss'
     if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed.' }
     $taskZip = Join-Path $taskRoot "dist/fpdf-$taskVersion-windows-x64.zip"
-    # Compress-Archive includes the enclosing fpdf directory for portable use.
-    Compress-Archive -LiteralPath $taskDist -DestinationPath $taskZip -CompressionLevel Optimal -Force
+    # Read shared runtime files without locking an existing reader's Node process.
+    Add-Type -AssemblyName System.IO.Compression
+    $taskZipStream = [System.IO.File]::Open($taskZip, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    try {
+        $taskArchive = New-Object System.IO.Compression.ZipArchive($taskZipStream, [System.IO.Compression.ZipArchiveMode]::Create, $true)
+        try {
+            foreach ($taskFile in Get-ChildItem -LiteralPath $taskDist -File -Recurse | Sort-Object FullName) {
+                $taskRelative = $taskFile.FullName.Substring($taskDist.Length + 1).Replace('\', '/')
+                $taskEntry = $taskArchive.CreateEntry("fpdf/$taskRelative", [System.IO.Compression.CompressionLevel]::Optimal)
+                $taskSourceStream = [System.IO.File]::Open($taskFile.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+                try {
+                    $taskEntryStream = $taskEntry.Open()
+                    try { $taskSourceStream.CopyTo($taskEntryStream) } finally { $taskEntryStream.Dispose() }
+                } finally { $taskSourceStream.Dispose() }
+            }
+        } finally { $taskArchive.Dispose() }
+    } finally { $taskZipStream.Dispose() }
     $taskPdf = Join-Path $taskRoot "dist/fpdf-$taskVersion-user-guide-zh-CN.pdf"
     Copy-Item -LiteralPath $taskManual -Destination $taskPdf -Force
     $taskAssets = @("$taskRoot/dist/fpdf-$taskVersion-windows-x64-setup.exe", $taskZip, $taskPdf)

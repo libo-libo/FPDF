@@ -15,6 +15,7 @@ pub enum TranslationAction {
     Auto(Option<bool>),
     Question,
     Highlight([u8; 3]),
+    Underline,
 }
 
 #[derive(Default)]
@@ -178,6 +179,10 @@ impl TextSelection {
                         }
                     }
                 });
+                if ui.button("下划线 · Ctrl+Shift+U").clicked() {
+                    self.action = Some(TranslationAction::Underline);
+                    ui.close();
+                }
                 if ui.button("AI：结合上下文翻译").clicked() {
                     self.action = Some(TranslationAction::Once(false));
                     ui.close();

@@ -103,6 +103,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let ai_smoke = args.iter().any(|a| a == "--ai-features");
     let grid_smoke = args.iter().any(|a| a == "--grid-features");
     let search_smoke = args.iter().any(|a| a == "--search-features");
+    let markup_smoke = args.iter().any(|a| a == "--markup-features");
     let tabs_smoke = args.iter().any(|a| a == "--tabs-features");
     let highlight_smoke = args.iter().any(|a| a == "--highlight-features");
     let settings_smoke = args.iter().any(|a| a == "--settings-features");
@@ -145,6 +146,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         || settings_smoke
         || highlight_smoke
         || tabs_smoke
+        || markup_smoke
     {
         if smoke.is_none() {
             return Err("--outline-features requires --smoke-ui".into());
@@ -182,10 +184,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     || search_smoke
                     || highlight_smoke
                     || settings_smoke
-                    || tabs_smoke,
+                    || tabs_smoke
+                    || markup_smoke,
                 outline_smoke,
                 reader_smoke,
-                if tabs_smoke {
+                if markup_smoke {
+                    app::ExtraSmoke::Markup
+                } else if tabs_smoke {
                     app::ExtraSmoke::Tabs
                 } else if highlight_smoke {
                     app::ExtraSmoke::Highlight

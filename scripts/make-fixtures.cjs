@@ -14,7 +14,7 @@ function rc4(key, data) {
   for (let n=0;n<data.length;n++) { i=(i+1)&255; j=(j+s[i])&255;[s[i],s[j]]=[s[j],s[i]];result[n]=data[n]^s[(s[i]+s[j])&255]; }
   return result;
 }
-function document(encrypted=false, nested=false, many=false) {
+function document(encrypted=false, nested=false, many=false, linked=false) {
   const id = md5(Buffer.from('fpdf original reading fixture v1'));
   const owner = rc4(md5(pad('owner')).subarray(0,5), pad('readme'));
   const permission = Buffer.alloc(4); permission.writeInt32LE(-4);
@@ -71,6 +71,14 @@ function document(encrypted=false, nested=false, many=false) {
     '<< /Title (02 Landscape) /Parent 10 0 R /Prev 11 0 R /Next 13 0 R /Dest [5 0 R /Fit] >>',
     '<< /Title (03 Final page) /Parent 10 0 R /Prev 12 0 R /Dest [7 0 R /Fit] >>',
   ];
+  if(linked) {
+    objs[3]=objs[3].replace('/Contents 4 0 R', '/Annots [14 0 R 15 0 R 16 0 R 17 0 R] /Contents 4 0 R');
+    objs.push('<< /Type /Annot /Subtype /Link /Rect [46 400 420 432] /Border [0 0 0] /Dest [7 0 R /XYZ 46 600 null] >>');
+    objs.push('<< /Type /Annot /Subtype /Link /Rect [46 310 420 340] /Border [0 0 0] /A << /S /GoTo /D (chapter-two) >> >>');
+    objs.push('<< /Type /Annot /Subtype /Link /Rect [46 340 420 365] /Border [0 0 0] /A << /S /URI /URI (https://example.invalid) >> >>');
+    objs.push('<< /Type /Annot /Subtype /Link /Rect [46 370 420 395] /Dest [99 /Fit] >>');
+    objs[1]=objs[1].replace('/Outlines 10 0 R','/Names << /Dests << /Names [(chapter-two) [5 0 R /Fit]] >> >> /Outlines 10 0 R');
+  }
   if(many) {
     objs[5] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>';
     const refs=['3 0 R','5 0 R','7 0 R'];
@@ -104,6 +112,7 @@ function document(encrypted=false, nested=false, many=false) {
   return Buffer.concat(chunks);
 }
 fs.writeFileSync(path.join(out,'reading-demo.pdf'),document());
+fs.writeFileSync(path.join(out,'linked-toc.pdf'),document(false,false,false,true));
 fs.writeFileSync(path.join(out,'nested-outline.pdf'),document(false,true));
 fs.writeFileSync(path.join(out,'grid-demo.pdf'),document(false,false,true));
 fs.writeFileSync(path.join(out,'password.pdf'),document(true));

@@ -14,6 +14,7 @@ pub fn rotate_text_rect(mut rect: [f32; 4], from: u8, to: u8) -> [f32; 4] {
 }
 #[derive(Clone, Debug)]
 pub struct TextGeometry {
+    pub page_transform: [[f32; 3]; 2],
     pub page: u32,
     pub rotation: u8,
     pub points: [f32; 2],
@@ -21,6 +22,10 @@ pub struct TextGeometry {
     pub truncated: bool,
 }
 impl TextGeometry {
+    pub fn project(&self, x: f64, y: f64) -> [f32; 2] {
+        self.page_transform
+            .map(|[a, b, c]| a * x as f32 + b * y as f32 + c)
+    }
     pub fn bytes(&self) -> usize {
         self.glyphs.len() * std::mem::size_of::<TextGlyph>()
     }
@@ -361,12 +366,12 @@ impl PageLayout {
 }
 
 #[derive(Default)]
-pub struct NavigationHistory {
-    back: Vec<u32>,
-    forward: Vec<u32>,
+pub struct NavigationHistory<T = u32> {
+    back: Vec<T>,
+    forward: Vec<T>,
 }
-impl NavigationHistory {
-    pub fn visit(&mut self, from: u32, to: u32) {
+impl<T: Copy + PartialEq> NavigationHistory<T> {
+    pub fn visit(&mut self, from: T, to: T) {
         if from == to {
             return;
         }
@@ -378,12 +383,12 @@ impl NavigationHistory {
         }
         self.forward.clear();
     }
-    pub fn back(&mut self, current: u32) -> Option<u32> {
+    pub fn back(&mut self, current: T) -> Option<T> {
         let page = self.back.pop()?;
         self.forward.push(current);
         Some(page)
     }
-    pub fn forward(&mut self, current: u32) -> Option<u32> {
+    pub fn forward(&mut self, current: T) -> Option<T> {
         let page = self.forward.pop()?;
         self.back.push(current);
         Some(page)

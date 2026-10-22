@@ -1,5 +1,13 @@
 # Validation
 
+## v0.8.5 underlines and embedded directory links — 2026-10-22
+
+- Formatting, all-target Clippy, 37 Rust tests and three AI bridge tests passed. Real PDF coverage adds direct/named internal targets, malformed/external target exclusion, four rotated link rectangles/destination positions, saved Underline subtype/quads, baseline pixel visibility and preservation of existing links.
+- Native GUI automation clicks both embedded directory entries, uses the Back button and Alt+Left/Right, and asserts restoration of the original scroll offset. Rapid return-and-click is covered.
+- Underline GUI coverage includes selecting a word first, continuous multiline dragging, an independently retained RGB palette, undo/redo, actual saved annotation colors and reopening. Highlighter, tabs, search/AI coexistence, reading and the general navigation/zoom workflow passed again.
+- Isolated v0.8.5 installation ran the same directory/underline GUI workflow; all 110 payload hashes matched. Confirming uninstall removed owned files and preserved a user PDF. All six manual pages were rendered and visually reviewed.
+- Internal navigation relies on embedded same-document PDF links. Unlinked plain/scanned directory text is not inferred.
+
 ## v0.8.4 unified repair — 2026-10-22
 
 - Format and all-target Clippy passed; 37 Rust tests pass, including actual PDF multi-client rendering/search/save isolation, global cache eviction, partial close, last-client runtime release and restart.

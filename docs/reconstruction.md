@@ -12,6 +12,7 @@ fpdf is an independent Rust PDF reader. The egui interface uses public PDFium AP
 - `src/outline.rs` / `src/outline_editor.rs`: bookmark changes, document identity checks and save operations.
 - `src/ai_reader.rs`: streamed answers, persistent translation and cancellation.
 - `src/search_ui.rs`: debounced whole-document search, virtualized right-side previews and temporary match overlays.
+- `src/pdf/links.rs`: public PDFium internal-link enumeration, named/direct destinations and rotated/cropped numeric link geometry.
 - `src/annotation.rs`: standards-compatible Highlight quads/appearance streams and identity-checked atomic persistence.
 - `ai-runtime/bridge.mjs`: JSONL communication and pi agent integration, exposing only bounded PDF text reads.
 
@@ -34,3 +35,9 @@ Highlighter input has two entry paths: apply to an existing selection or keep th
 WPS alignment uses shipped highlight commands, Ctrl+F2, color/more-colors resources and quad interfaces documented in local REA research. Static evidence does not establish exact WPS timing, color blending or the complete native save implementation; fpdf's preview/cache strategy is independent.
 
 Application code is MIT licensed. Releases include independent PDFium, Node.js, pi and dependency notices. Proprietary programs, extracted assets, analysis tools, real AI configuration and tokens are excluded.
+
+## Underlines and embedded destinations
+
+Highlight and Underline use the same undo/persistence pipeline with independent selected colors. Underlines store standard `/Subtype /Underline`, PDF-space quads and stroke appearance streams. Cached page transforms project the true PDF baseline onto the immediate UI layer, including crop and rotation.
+
+Embedded directory links use PDFium destination/action APIs. Only same-document GoTo targets are activated; plain text without a link is not inferred. Navigation history retains page and fractional scroll offset. Dragging selects text; ordinary clicks on internal links navigate when no marking tool is active.

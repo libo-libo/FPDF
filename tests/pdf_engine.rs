@@ -24,6 +24,103 @@ fn wait_for_idle_runtime() {
     }
 }
 
+fn internal_links_and_underlines(pdf: &mut PdfEngine) {
+    use fpdf::annotation::{HighlightDocument, MarkKind};
+    let dir = tempfile::tempdir().unwrap();
+    let source = fixture("linked-toc.pdf");
+    pdf.open(&source, "").unwrap();
+    for rotation in 0..4 {
+        let page = pdf.render(0, 612, rotation).unwrap();
+        assert_eq!(
+            page.links.len(),
+            2,
+            "external and malformed targets must not become internal links"
+        );
+        assert_eq!(page.links[0].destination.page, 2);
+        assert_eq!(
+            page.links[1].destination.page, 1,
+            "named GoTo action resolution"
+        );
+        let expected = fpdf::reading::rotate_text_rect(
+            [46.0 / 612.0, 360.0 / 792.0, 420.0 / 612.0, 392.0 / 792.0],
+            0,
+            rotation,
+        );
+        for (a, b) in page.links[0].rect.iter().zip(expected) {
+            assert!((a - b).abs() < 0.001);
+        }
+        let dest = page.links[0].destination.position.unwrap();
+        let expected = fpdf::reading::rotate_text_rect(
+            [46.0 / 612.0, 192.0 / 792.0, 46.0 / 612.0, 192.0 / 792.0],
+            0,
+            rotation,
+        );
+        assert!((dest[0] - expected[0]).abs() < 0.001 && (dest[1] - expected[1]).abs() < 0.001);
+        let g = page.geometry.unwrap();
+        let origin = g.project(46.0, 600.0);
+        assert!((origin[0] - expected[0]).abs() < 0.001 && (origin[1] - expected[1]).abs() < 0.001);
+    }
+    let selection = pdf
+        .select_word(2, [150.0 / 612.0, 72.0 / 792.0], 0)
+        .unwrap();
+    assert_eq!(selection.text.trim(), "page");
+    let mut document = HighlightDocument::load(&source).unwrap();
+    document
+        .add_markup(&selection, [235, 40, 60], MarkKind::Underline)
+        .unwrap();
+    let output = dir.path().join("underlined.pdf");
+    document.save(&output).unwrap();
+    let parsed = lopdf::Document::load(&output).unwrap();
+    let annots = parsed
+        .get_dictionary(parsed.get_pages()[&3])
+        .unwrap()
+        .get(b"Annots")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    let annot = parsed
+        .get_dictionary(annots[0].as_reference().unwrap())
+        .unwrap();
+    assert_eq!(
+        annot.get(b"Subtype").unwrap().as_name().unwrap(),
+        b"Underline"
+    );
+    assert_eq!(
+        annot.get(b"QuadPoints").unwrap().as_array().unwrap().len(),
+        selection.quads.len() * 8
+    );
+    for rotation in 0..4 {
+        pdf.open(&source, "").unwrap();
+        let before = pdf.render(2, 612, rotation).unwrap();
+        pdf.open(&output, "").unwrap();
+        let after = pdf.render(2, 612, rotation).unwrap();
+        let geometry = after.geometry.as_ref().unwrap();
+        let q = selection.quads[0];
+        let a = geometry.project(q[4], q[5]);
+        let b = geometry.project(q[6], q[7]);
+        let x = ((a[0] + b[0]) * 0.5 * after.width as f32) as i32;
+        let y = ((a[1] + b[1]) * 0.5 * after.height as f32) as i32;
+        let changed = (-2..=2)
+            .flat_map(|dy| (-2..=2).map(move |dx| (dx, dy)))
+            .any(|(dx, dy)| {
+                let x = (x + dx).clamp(0, after.width as i32 - 1) as usize;
+                let y = (y + dy).clamp(0, after.height as i32 - 1) as usize;
+                let i = (y * after.width as usize + x) * 4;
+                before.rgba[i..i + 3] != after.rgba[i..i + 3]
+                    && i16::from(after.rgba[i]) > i16::from(after.rgba[i + 1]) + 50
+            });
+        assert!(
+            changed,
+            "underline must render at its true baseline for rotation {rotation}"
+        );
+        assert_eq!(
+            pdf.render(0, 612, rotation).unwrap().links.len(),
+            2,
+            "existing directory links preserved"
+        );
+    }
+}
+
 fn shared_reader_sessions_are_isolated() {
     use worker::{ReaderChannels, RenderTarget, ViewportRequest};
     let first = worker::spawn_reader(|| {});
@@ -618,6 +715,7 @@ fn search_and_highlight_round_trip(pdf: &mut PdfEngine) {
 #[test]
 fn real_pdf_loading_rendering_and_worker_lifecycle() {
     let mut pdf = PdfEngine::new(&library_path().expect("PDFium runtime installed")).unwrap();
+    internal_links_and_underlines(&mut pdf);
     assert!(PdfEngine::new(&library_path().unwrap()).is_err());
     assert_eq!(pdf.open(&fixture("reading-demo.pdf"), "").unwrap(), 3);
     let info = pdf.document_info().unwrap();

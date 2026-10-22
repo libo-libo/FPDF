@@ -1,4 +1,5 @@
 use eframe::egui::{self, Color32, Rect, RichText, Vec2};
+use fpdf::annotation::MarkKind;
 use fpdf::pdf::{DocumentInfo, PageImage, save_png};
 use fpdf::reading::{NavigationHistory, PageLayout, PaperTheme, ReadingMode, render_width};
 use fpdf::worker::{self, RenderTarget, ViewportRequest, ViewportResponse};
@@ -7,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
+mod markup_smoke;
 mod tabs;
 pub use tabs::WindowApp;
 
@@ -16,6 +18,11 @@ enum Zoom {
     FitWidth,
     FitPage,
     Scale(f32),
+}
+#[derive(Clone, Copy, Default, PartialEq)]
+struct ReadingPosition {
+    page: u32,
+    fraction: f32,
 }
 #[derive(Clone, Copy, PartialEq)]
 enum NavigationTab {
@@ -36,6 +43,7 @@ pub enum ExtraSmoke {
     Settings,
     Highlight,
     Tabs,
+    Markup,
 }
 
 pub struct ReaderApp {
@@ -43,6 +51,8 @@ pub struct ReaderApp {
     tab_action: Option<tabs::TabAction>,
     other_tab_pending: bool,
     smoke_tabs: bool,
+    smoke_markup: bool,
+    smoke_return_y: f32,
     smoke_highlight: bool,
     smoke_highlight_before: Option<Arc<PageImage>>,
     smoke_ink_started: Option<Instant>,
@@ -56,6 +66,8 @@ pub struct ReaderApp {
     highlight_pending: Option<u64>,
     highlight_color: [u8; 3],
     highlight_tool: bool,
+    mark_kind: MarkKind,
+    underline_color: [u8; 3],
     highlight_history: fpdf::annotation::HighlightHistory,
     highlight_saved: Vec<Arc<fpdf::annotation::HighlightMark>>,
     highlight_saved_path: Option<PathBuf>,
@@ -114,7 +126,7 @@ pub struct ReaderApp {
     error: Option<String>,
     password: String,
     need_password: bool,
-    history: NavigationHistory,
+    history: NavigationHistory<ReadingPosition>,
     layout: PageLayout,
     layout_key: Option<LayoutKey>,
     jump: Option<(u32, f32)>,
@@ -194,6 +206,8 @@ impl ReaderApp {
             tab_action: None,
             other_tab_pending: false,
             smoke_tabs: matches!(smoke_extra, ExtraSmoke::Tabs),
+            smoke_markup: matches!(smoke_extra, ExtraSmoke::Markup),
+            smoke_return_y: 0.0,
             smoke_highlight: matches!(smoke_extra, ExtraSmoke::Highlight),
             smoke_highlight_before: None,
             smoke_ink_started: None,
@@ -210,6 +224,8 @@ impl ReaderApp {
             highlight_pending: None,
             highlight_color: [255, 230, 70],
             highlight_tool: false,
+            mark_kind: MarkKind::Highlight,
+            underline_color: [235, 80, 80],
             highlight_history: Default::default(),
             highlight_saved: Vec::new(),
             highlight_saved_path: None,
@@ -565,7 +581,52 @@ impl ReaderApp {
             .filter(|mark| mark.selection.page == page)
         {
             let [r, g, b] = mark.color;
+            if mark.kind == MarkKind::Underline
+                && let Some(geometry) = self
+                    .cache
+                    .iter()
+                    .find(|e| {
+                        e.target.page == page
+                            && e.target.rotation == rotation
+                            && e.image.geometry.is_some()
+                    })
+                    .and_then(|e| e.image.geometry.as_ref())
+            {
+                for q in &mark.selection.quads {
+                    let a = geometry.project(q[4], q[5]);
+                    let bpt = geometry.project(q[6], q[7]);
+                    ui.painter().line_segment(
+                        [
+                            rect.min + Vec2::new(a[0] * rect.width(), a[1] * rect.height()),
+                            rect.min + Vec2::new(bpt[0] * rect.width(), bpt[1] * rect.height()),
+                        ],
+                        egui::Stroke::new(
+                            (rect.width() / 612.0).clamp(1.0, 4.0),
+                            Color32::from_rgb(r, g, b),
+                        ),
+                    );
+                }
+                continue;
+            }
             for &region in &mark.selection.rects {
+                if mark.kind == MarkKind::Underline {
+                    let [l, _, rgt, bottom] =
+                        fpdf::reading::rotate_text_rect(region, mark.rotation, 0);
+                    let a = fpdf::reading::rotate_text_rect([l, bottom, l, bottom], 0, rotation);
+                    let bpt =
+                        fpdf::reading::rotate_text_rect([rgt, bottom, rgt, bottom], 0, rotation);
+                    ui.painter().line_segment(
+                        [
+                            rect.min + Vec2::new(a[0] * rect.width(), a[1] * rect.height()),
+                            rect.min + Vec2::new(bpt[0] * rect.width(), bpt[1] * rect.height()),
+                        ],
+                        egui::Stroke::new(
+                            (rect.width() / 612.0).clamp(1.0, 4.0),
+                            Color32::from_rgb(r, g, b),
+                        ),
+                    );
+                    continue;
+                }
                 let [left, top, right, bottom] =
                     fpdf::reading::rotate_text_rect(region, mark.rotation, rotation);
                 ui.painter().rect_filled(
@@ -580,15 +641,33 @@ impl ReaderApp {
         }
     }
     fn toggle_highlight_tool(&mut self) {
+        self.toggle_markup_tool(MarkKind::Highlight);
+    }
+    fn annotation_color(&self) -> [u8; 3] {
+        if self.mark_kind == MarkKind::Underline {
+            self.underline_color
+        } else {
+            self.highlight_color
+        }
+    }
+    fn set_annotation_color(&mut self, color: [u8; 3]) {
+        if self.mark_kind == MarkKind::Underline {
+            self.underline_color = color;
+        } else {
+            self.highlight_color = color;
+        }
+    }
+    fn toggle_markup_tool(&mut self, kind: MarkKind) {
         if self.path.is_none() {
             return;
         }
-        self.highlight_tool = !self.highlight_tool;
+        self.highlight_tool = !self.highlight_tool || self.mark_kind != kind;
+        self.mark_kind = kind;
         if self.highlight_tool && self.selection.current.is_some() {
             self.highlight_selection(false);
         } else if self.highlight_tool {
             self.selection.notice =
-                "高亮工具已开启：拖选文字即标注，Ctrl+Z 撤销，Esc 退出。".into();
+                "标注工具已开启：拖选文字即标注，Ctrl+Z 撤销，Esc 退出。".into();
         } else {
             self.selection.notice = "已退出高亮工具。".into();
         }
@@ -654,7 +733,8 @@ impl ReaderApp {
         if let Err(error) = self.highlight_history.add(fpdf::annotation::HighlightMark {
             selection,
             rotation: self.rotation,
-            color: self.highlight_color,
+            color: self.annotation_color(),
+            kind: self.mark_kind,
         }) {
             self.selection.notice = error;
             return;
@@ -711,17 +791,34 @@ impl ReaderApp {
             return;
         }
         let page = page.min(self.pages() - 1);
-        self.history.visit(self.page, page);
+        self.history.visit(
+            self.reading_position(),
+            ReadingPosition {
+                page,
+                fraction: 0.0,
+            },
+        );
         self.set_page(page);
     }
+    fn reading_position(&self) -> ReadingPosition {
+        ReadingPosition {
+            page: self.page,
+            fraction: self
+                .layout
+                .placement(self.page)
+                .map_or(0.0, |p| (self.scroll_y + 12.0 - p.top) / p.height),
+        }
+    }
     fn back(&mut self) {
-        if let Some(p) = self.history.back(self.page) {
-            self.set_page(p);
+        if let Some(p) = self.history.back(self.reading_position()) {
+            self.set_page(p.page);
+            self.jump = Some((p.page, p.fraction));
         }
     }
     fn forward(&mut self) {
-        if let Some(p) = self.history.forward(self.page) {
-            self.set_page(p);
+        if let Some(p) = self.history.forward(self.reading_position()) {
+            self.set_page(p.page);
+            self.jump = Some((p.page, p.fraction));
         }
     }
     fn effective_zoom(&self) -> f32 {
@@ -901,6 +998,11 @@ impl ReaderApp {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F2)) {
             self.toggle_highlight_tool();
         }
+        if ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::U)
+        }) {
+            self.toggle_markup_tool(MarkKind::Underline);
+        }
         if fit {
             self.zoom = Zoom::FitWidth;
         }
@@ -1022,47 +1124,50 @@ impl ReaderApp {
         let mut open = true;
         let mut apply = false;
         let mut cancel = false;
-        egui::Window::new("高亮颜色 · 调色盘")
-            .id(egui::Id::new("highlight-color-window"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.label("点选颜色后立即用于后续标注；取消恢复原色。");
-                let (plane, bar, _) = self.highlight_palette.show(ui, &mut self.highlight_draft);
-                self.hit("highlight-palette", plane);
-                self.hit("highlight-brightness", bar);
-                ui.horizontal(|ui| {
-                    for (i, name) in ["R", "G", "B"].into_iter().enumerate() {
-                        ui.label(name);
-                        let value = ui.add(
-                            egui::DragValue::new(&mut self.highlight_draft[i])
-                                .range(0..=255)
-                                .speed(1.0),
-                        );
-                        self.hit(&format!("highlight-{name}"), value);
-                    }
-                });
-                let [r, g, b] = self.highlight_draft;
-                ui.horizontal(|ui| {
-                    let (rect, _) =
-                        ui.allocate_exact_size(Vec2::new(44.0, 24.0), egui::Sense::hover());
-                    ui.painter()
-                        .rect_filled(rect, 3, Color32::from_rgb(r, g, b));
-                    ui.label(format!("RGB({r}, {g}, {b})  #{r:02X}{g:02X}{b:02X}"));
-                });
-                ui.horizontal(|ui| {
-                    apply = self
-                        .hit("highlight-color-apply", ui.button("确定"))
-                        .clicked();
-                    cancel = self
-                        .hit("highlight-color-cancel", ui.button("取消"))
-                        .clicked();
-                });
+        egui::Window::new(if self.mark_kind == MarkKind::Underline {
+            "下划线颜色 · 调色盘"
+        } else {
+            "高亮颜色 · 调色盘"
+        })
+        .id(egui::Id::new("highlight-color-window"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.label("点选颜色后立即用于后续标注；取消恢复原色。");
+            let (plane, bar, _) = self.highlight_palette.show(ui, &mut self.highlight_draft);
+            self.hit("highlight-palette", plane);
+            self.hit("highlight-brightness", bar);
+            ui.horizontal(|ui| {
+                for (i, name) in ["R", "G", "B"].into_iter().enumerate() {
+                    ui.label(name);
+                    let value = ui.add(
+                        egui::DragValue::new(&mut self.highlight_draft[i])
+                            .range(0..=255)
+                            .speed(1.0),
+                    );
+                    self.hit(&format!("highlight-{name}"), value);
+                }
             });
-        self.highlight_color = self.highlight_draft;
+            let [r, g, b] = self.highlight_draft;
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(Vec2::new(44.0, 24.0), egui::Sense::hover());
+                ui.painter()
+                    .rect_filled(rect, 3, Color32::from_rgb(r, g, b));
+                ui.label(format!("RGB({r}, {g}, {b})  #{r:02X}{g:02X}{b:02X}"));
+            });
+            ui.horizontal(|ui| {
+                apply = self
+                    .hit("highlight-color-apply", ui.button("确定"))
+                    .clicked();
+                cancel = self
+                    .hit("highlight-color-cancel", ui.button("取消"))
+                    .clicked();
+            });
+        });
+        self.set_annotation_color(self.highlight_draft);
         if cancel || !open {
-            self.highlight_color = self.highlight_before;
+            self.set_annotation_color(self.highlight_before);
             self.highlight_palette_open = false;
         } else if apply {
             self.highlight_palette_open = false;
@@ -1188,8 +1293,8 @@ impl ReaderApp {
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.menu_button("文件",|ui| {
-                        if ui.add_enabled(self.highlight_history.can_undo(),egui::Button::new("撤销高亮 · Ctrl+Z")).clicked() {self.undo_highlight(false);ui.close();}
-                        if ui.add_enabled(self.highlight_history.can_redo(),egui::Button::new("重做高亮 · Ctrl+Y")).clicked() {self.undo_highlight(true);ui.close();}
+                        if ui.add_enabled(self.highlight_history.can_undo(),egui::Button::new("撤销标注 · Ctrl+Z")).clicked() {self.undo_highlight(false);ui.close();}
+                        if ui.add_enabled(self.highlight_history.can_redo(),egui::Button::new("重做标注 · Ctrl+Y")).clicked() {self.undo_highlight(true);ui.close();}
                         ui.separator();
                         if ui.button("新标签页 · Ctrl+T").clicked() {self.tab_action=Some(tabs::TabAction::New);ui.close();}
                         if ui.button("关闭标签页 · Ctrl+W").clicked() {self.tab_action=Some(tabs::TabAction::Close);ui.close();}
@@ -1410,7 +1515,8 @@ impl ReaderApp {
                             ui.separator();
                             ui.vertical(|ui| {
                                 let can_mark = self.path.is_some();
-                                let mark = ui.add_enabled(can_mark, egui::Button::new("高亮标注").selected(self.highlight_tool));
+                                ui.horizontal(|ui| {
+                                let mark = ui.add_enabled(can_mark, egui::Button::new("高亮标注").selected(self.highlight_tool && self.mark_kind == MarkKind::Highlight));
                                 if self
                                     .hit("highlight-selection", mark)
                                     .on_hover_text("开启后拖选文字即可连续高亮；也可先选文字再点击。Ctrl+F2 切换，Esc 退出。")
@@ -1418,6 +1524,9 @@ impl ReaderApp {
                                 {
                                     self.toggle_highlight_tool();
                                 }
+                                let underline = ui.add_enabled(can_mark, egui::Button::new("下划线").selected(self.highlight_tool && self.mark_kind == MarkKind::Underline));
+                                if self.hit("underline-selection", underline).on_hover_text("先选文字再点击，或开启后连续拖选；Ctrl+Shift+U 切换，Esc 退出。").clicked() { self.toggle_markup_tool(MarkKind::Underline); }
+                                });
                                 let colors = ui.menu_button("标注颜色", |ui| {
                                     for (name, color) in [
                                         ("黄色", [255, 230, 70]),
@@ -1426,17 +1535,17 @@ impl ReaderApp {
                                         ("粉色", [255, 150, 200]),
                                     ] {
                                         if ui
-                                            .selectable_label(self.highlight_color == color, name)
+                                            .selectable_label(self.annotation_color() == color, name)
                                             .clicked()
                                         {
-                                            self.highlight_color = color;
+                                            self.set_annotation_color(color);
                                             ui.close();
                                         }
                                     }
                                     ui.separator();
                                     if self.hit("highlight-custom-color",ui.button("自定义颜色…")).clicked() {
-                                        self.highlight_draft = self.highlight_color;
-                                        self.highlight_before = self.highlight_color;
+                                        self.highlight_draft = self.annotation_color();
+                                        self.highlight_before = self.annotation_color();
                                         self.highlight_palette = crate::color_palette::Palette::from_rgb(self.highlight_draft);
                                         self.highlight_palette_open = true;
                                         ui.close();
@@ -1444,7 +1553,7 @@ impl ReaderApp {
                                     if ui
                                         .add_enabled(
                                             can_mark && self.selection.current.is_some(),
-                                            egui::Button::new("添加高亮并另存为…"),
+                                            egui::Button::new("添加标注并另存为…"),
                                         )
                                         .clicked()
                                     {
@@ -1453,7 +1562,7 @@ impl ReaderApp {
                                     }
                                 });
                                 self.hit("highlight-colors", colors.response);
-                                ui.label(RichText::new(if self.highlight_tool {"高亮中 · Esc 退出"} else {"文本标注"}).small().color(if self.highlight_tool {Color32::from_rgb(205,150,30)} else {self.muted()}));
+                                ui.label(RichText::new(if self.highlight_tool {if self.mark_kind == MarkKind::Underline {"下划线中 · Esc 退出"} else {"高亮中 · Esc 退出"}} else {"文本标注"}).small().color(if self.highlight_tool {Color32::from_rgb(205,150,30)} else {self.muted()}));
                             });
                             ui.separator();
                             ui.vertical(|ui| {
@@ -2055,43 +2164,19 @@ impl ReaderApp {
                             egui::StrokeKind::Outside,
                         );
                         self.search.paint(ui, rect, p.page);
-                        for mark in self
+                        if self
                             .highlight_history
                             .active()
                             .iter()
-                            .filter(|m| m.selection.page == p.page)
+                            .any(|m| m.selection.page == p.page)
+                            && let Some(started) = self.smoke_ink_started.take()
                         {
-                            if let Some(started) = self.smoke_ink_started.take() {
-                                let elapsed = started.elapsed();
-                                assert!(
-                                    elapsed < Duration::from_millis(100),
-                                    "Input-to-ink delayed: {elapsed:?}"
-                                );
-                                self.smoke_ink_seen = true;
-                                println!("Input-frame ink: {elapsed:?}");
-                            }
-                            let [r, g, b] = mark.color;
-                            for &region in &mark.selection.rects {
-                                let [left, top, right, bottom] = fpdf::reading::rotate_text_rect(
-                                    region,
-                                    mark.rotation,
-                                    self.rotation,
-                                );
-                                ui.painter().rect_filled(
-                                    Rect::from_min_max(
-                                        rect.min
-                                            + Vec2::new(left * rect.width(), top * rect.height()),
-                                        rect.min
-                                            + Vec2::new(
-                                                right * rect.width(),
-                                                bottom * rect.height(),
-                                            ),
-                                    ),
-                                    0.0,
-                                    Color32::from_rgba_unmultiplied(r, g, b, 90),
-                                );
-                            }
+                            let elapsed = started.elapsed();
+                            assert!(elapsed < Duration::from_millis(100));
+                            self.smoke_ink_seen = true;
+                            println!("Input-frame ink: {elapsed:?}");
                         }
+                        self.paint_highlights(ui, rect, p.page, self.rotation);
                         let geometry = self
                             .cache
                             .iter()
@@ -2109,9 +2194,49 @@ impl ReaderApp {
                             geometry.as_deref(),
                         );
                         self.hit(&format!("selection-page-{}", p.page), response.clone());
+                        let mut link_activated = false;
+                        if !self.highlight_tool {
+                            let links = self
+                                .cache
+                                .iter()
+                                .find(|e| {
+                                    e.target.page == p.page && e.target.rotation == self.rotation
+                                })
+                                .map(|e| &e.image.links);
+                            if let Some(link) = links.and_then(|links| {
+                                links.iter().rev().find(|link| {
+                                    let [l, t, r, b] = link.rect;
+                                    let hit = Rect::from_min_max(
+                                        rect.min + Vec2::new(l * rect.width(), t * rect.height()),
+                                        rect.min + Vec2::new(r * rect.width(), b * rect.height()),
+                                    );
+                                    response.hover_pos().is_some_and(|pos| hit.contains(pos))
+                                })
+                            }) {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                response.clone().on_hover_text(format!(
+                                    "跳转到第 {} 页 · Alt+← 返回",
+                                    link.destination.page + 1
+                                ));
+                                if response.clicked() {
+                                    link_activated = true;
+                                    let destination = link.destination;
+                                    self.selection.current = None;
+                                    self.selection.pending = None;
+                                    self.selection.committed = false;
+                                    self.selection.invalidate = true;
+                                    self.goto(destination.page);
+                                    self.jump = Some((
+                                        destination.page,
+                                        destination.position.map_or(0.0, |p| p[1].clamp(0.0, 1.0)),
+                                    ));
+                                }
+                            }
+                        }
+
                         if self.layout.columns > 1 {
                             self.hit(&format!("grid-page-{}", p.page), response.clone());
-                            if response.clicked() {
+                            if response.clicked() && !link_activated {
                                 self.goto(p.page);
                             }
                             ui.painter().text(
@@ -2552,6 +2677,7 @@ impl ReaderApp {
                     text: String::new(),
                     text_truncated: false,
                     geometry: None,
+                    links: vec![],
                 };
                 if let Err(e) = save_png(&path, &page) {
                     eprintln!("screenshot failed: {e}");
@@ -2586,7 +2712,12 @@ impl ReaderApp {
             self.settled_frames = 0;
         }
         if self.settled_frames > 8 {
-            if self.smoke_highlight && self.smoke_step < 27 {
+            if self.smoke_markup && self.smoke_step < 23 {
+                self.smoke_markup_step();
+                self.smoke_step += 1;
+                self.settled_frames = 0;
+                ctx.request_repaint();
+            } else if self.smoke_highlight && self.smoke_step < 27 {
                 let key = |key, modifiers| egui::Event::Key {
                     key,
                     modifiers,
@@ -3388,6 +3519,7 @@ impl ReaderApp {
                 self.settled_frames = 0;
                 ctx.request_repaint();
             } else if self.smoke_features
+                && !self.smoke_markup
                 && !self.smoke_outline
                 && !self.smoke_reader
                 && !self.smoke_ai
@@ -3632,6 +3764,7 @@ impl ReaderApp {
                     && !self.smoke_search
                     && !self.smoke_settings
                     && !self.smoke_highlight
+                    && !self.smoke_markup
                 {
                     assert_eq!(self.theme, PaperTheme::Green);
                     assert!(self.layout.pages.len() >= 3);
@@ -3744,7 +3877,7 @@ impl eframe::App for ReaderApp {
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
             self.highlight_palette_open = false;
-            self.highlight_color = self.highlight_before;
+            self.set_annotation_color(self.highlight_before);
         }
         if self.highlight_pending.is_some() && ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -3954,7 +4087,7 @@ impl eframe::App for ReaderApp {
             );
         }
         self.text(ctx);
-        self.selection.highlight_color = self.highlight_tool.then_some(self.highlight_color);
+        self.selection.highlight_color = self.highlight_tool.then_some(self.annotation_color());
         self.content(ctx);
         if std::mem::take(&mut self.selection.committed) {
             if let Some(selection) = self.selection.current.clone() {
@@ -4012,7 +4145,12 @@ impl eframe::App for ReaderApp {
                     self.ai.open_question();
                 }
                 crate::text_selection::TranslationAction::Highlight(color) => {
+                    self.mark_kind = MarkKind::Highlight;
                     self.highlight_color = color;
+                    self.highlight_selection(false);
+                }
+                crate::text_selection::TranslationAction::Underline => {
+                    self.mark_kind = MarkKind::Underline;
                     self.highlight_selection(false);
                 }
             }
