@@ -68,10 +68,10 @@ def screenshot(name, width=WIDTH):
 section(1, '开始使用')
 add('fpdf', 'cover')
 add('PDF 阅读器 · 中文使用说明', 'subtitle')
-add(f'版本 {VERSION}  |  Windows x64  |  2026-10-21', 'small')
+add(f'版本 {VERSION}  |  Windows x64  |  2026-10-22', 'small')
 add('连续阅读、目录编辑、选词翻译。界面采用简洁的工具栏与左右侧栏布局。普通阅读无需联网，AI 功能由使用者自行配置。')
-screenshot('fpdf-outline-pages-preview.png', 450)
-add('夜间模式实际界面：章节名称后以 * 引导页码，所有层级统一右对齐。', 'caption')
+screenshot('fpdf-search-preview.png', 450)
+add('夜间模式实际界面：右侧全文搜索预览，点击结果跳转并高亮命中。', 'caption')
 table([
     ['三步开始', '操作'],
     ['1. 安装或解压', '运行安装程序；或完整解压免安装包，保留整个目录。'],
@@ -83,7 +83,7 @@ add('阅读指引：安装与阅读 02 / 文档目录与外观 03 / AI 配置 04
 section(2, '安装与阅读')
 add('从 GitHub 下载 Release 包', 'h2')
 add('1. 打开 github.com/libo-libo/FPDF，点击右侧 Releases；也可直接访问 github.com/libo-libo/FPDF/releases/latest。', 'small')
-add('2. 进入最新版本 v0.7.0，展开页面下方 Assets，点击 setup.exe（安装版）或 windows-x64.zip（免安装版）下载。不需要 Git 或 GitHub 账号。', 'small')
+add(f'2. 选择相应版本（本说明对应 v{VERSION}），展开页面下方 Assets，点击 setup.exe（安装版）或 windows-x64.zip（免安装版）下载。不需要 Git 或 GitHub 账号。', 'small')
 add('3. 安装版：双击 setup.exe 按向导安装。免安装版：右键 ZIP → 全部解压，运行其中的 fpdf.exe。Source code 是开发源码，不能直接当阅读器运行。手册与校验文件也在 Assets。', 'small')
 add('选择一种分发方式', 'h2')
 table([
@@ -101,7 +101,7 @@ add('顶部和底部的缩小 / 放大按钮均可使用。底部百分比支持
 add('“实际大小”为 100%；“适合宽度”根据窗口宽度调整，“适合页面”完整显示当前页。“顺时针旋转”每次旋转 90 度。')
 add('连续模式下缩小到合适比例，会按可用宽度自动排列为每行 2、4、8 页；放大后回到每行 1 页。点击小页面可选为当前页，红框显示选中页。单页模式始终只显示一页。')
 add('滚动与当前页文本', 'h2')
-add('右侧实心滚动条可拖动定位。页面超宽时使用底部横向滚动条。“查找文本”统计当前页关键词；“文本面板”可选择并复制提取文字。全篇搜索暂未提供。')
+add('Ctrl+F 或“全文搜索”在整个 PDF 中查找，右侧预览命中片段、页码和进度；点击结果跳转，上一个 / 下一个依次定位。支持区分大小写与全词匹配，页面黄色为匹配、橙色为当前结果。“文本面板”仍可复制当前页文字。')
 
 section(3, '文档目录与阅读外观')
 add('目录页码、折叠与跳转', 'h2')
@@ -119,6 +119,8 @@ table([
     ['确定 / 取消', '选色后立即预览；“确定”保留，“取消”恢复进入窗口前的颜色。'],
 ])
 add('背景和文字颜色只改变阅读显示，不修改 PDF。主题在重启后保留，设置位于 %APPDATA%/fpdf/reading-theme.txt。')
+add('保存文本高亮标注', 'h2')
+add('选中文字后点击“高亮标注”或按 Ctrl+F2，也可右键选择高亮颜色。支持黄、绿、蓝、粉四种颜色及另存副本。高亮保存为标准 PDF 标注，重新打开仍会显示；查找的临时高亮不会写入文件。加密、签名或被外部修改的文档会停止保存并提示原因。')
 
 section(4, 'AI 配置与文档问答')
 add('先配置你自己的接口', 'h2')
@@ -128,9 +130,11 @@ table([
     ['第一行', 'https://your-api.example/v1'],
     ['第二行', 'YOUR_API_KEY'],
 ])
-add('可复制 agent.example.txt 为 agent.txt 后编辑。推荐放到 %APPDATA%/fpdf/agent.txt，或在 AI 面板点击“配置文件”选择已有文件。也可放在程序旁，或用环境变量 FPDF_AGENT_CONFIG 指向配置文件。')
+add('推荐直接点击 AI 面板的“API 配置”，填写接口基础地址和密钥，再点“保存并连接”。密钥默认隐藏显示，配置保存在 %APPDATA%/fpdf/agent.txt；重启后仍可用。即使 AI 正在工作，也能打开配置。')
+add('已有两行配置文件可点击“导入配置”；导入窗口在后台打开，不会卡住阅读界面。也可复制 agent.example.txt 为 agent.txt 后编辑，或用环境变量 FPDF_AGENT_CONFIG 指定配置。', 'small')
 add('保留 ai/ 文件夹。点击顶部“AI 辅助阅读”，再点击“连接”。默认模型为 GLM-5.3-Flash；连接后可从接口返回的列表中选择其他模型。接口列出某模型不代表该账号一定能调用，失败时请检查自己的服务权限。')
 add('总结、提问与引用跳转', 'h2')
+add('问题输入框直接显示，无需先翻译。选中文字后点击工具栏或右键中的“针对选区提问”，输入问题后发送；未连接时可“连接并提问”。提问会结合选区、附近上下文与页码。')
 add('点击“总结当前页”快速获取要点；“概览文档”按目录选择代表页面。输入问题后点击“发送问题”，或按 Ctrl+Enter。回答逐步显示，可继续追问。')
 add('回答下方的“第 N 页”按钮可跳转到引用页面。切换文档或模型会结束旧会话；概览会注明已读范围，不能替代全文逐页审阅。')
 add('数据与读取范围', 'h2')
@@ -153,7 +157,8 @@ add('长开状态在本次运行中保持，切换文档 / 清空会话仍保留
 section(6, '快捷键与常见问题')
 table([
     ['快捷键', '功能'],
-    ['Ctrl+O / Ctrl+F', '打开 PDF / 当前页查找'],
+    ['Ctrl+O / Ctrl+F', '打开 PDF / 全 PDF 查找'],
+    ['Ctrl+F2', '将选中文字保存为高亮标注'],
     ['PageUp / PageDown', '上一页 / 下一页'],
     ['Ctrl+Home / Ctrl+End', '首页 / 末页'],
     ['Alt+Left / Alt+Right', '后退 / 前进'],
@@ -170,8 +175,10 @@ table([
     ['无法选择或翻译文字', '扫描页需要 OCR；从文字处开始选取，同一页内拖选。'],
     ['目录不能保存', '检查文件写权限、外部修改、密码与数字签名；可尝试另存副本。'],
 ])
+add('一键卸载与清理', 'h2')
+add('安装版可在“文件 → 卸载 fpdf（清除全部配置）”或开始菜单同名入口一键卸载；Windows 设置的“已安装的应用”也可卸载。会清理程序、本程序保存的 AI 配置、主题、缓存与日志，并保留用户 PDF。免安装版退出后删除程序目录；个人配置在 %APPDATA%/fpdf。', 'small')
 add('当前边界与开源信息', 'h2')
-add('暂未提供 OCR、全篇搜索、跨页拖选、持久批注、页面内容编辑或打印。单文件最多 512 MiB；复杂 PDF 的兼容性仍需结合实际文档判断。')
+add('暂未提供 OCR、跨页拖选、附注文本编辑、页面内容编辑或打印。单文件最多 512 MiB。全文查找每页最多显示 2,000 条、全篇 20,000 条，达到上限会提示。复杂 PDF 的兼容性仍需结合实际文档判断。')
 add('应用界面与逻辑由 Rust 实现，PDF 解析和渲染使用独立 PDFium；AI 使用 pi agent，不依赖 WPS 私有 DLL。应用代码采用 MIT 许可证，第三方条款随包保留。', 'small')
 add('<link href="https://github.com/libo-libo/FPDF" color="#DA3336">源码与 README：github.com/libo-libo/FPDF</link><br/><link href="https://github.com/libo-libo/FPDF/releases" color="#DA3336">下载与版本记录：github.com/libo-libo/FPDF/releases</link>', 'small')
 

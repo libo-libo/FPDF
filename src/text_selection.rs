@@ -13,6 +13,8 @@ pub struct Gesture {
 pub enum TranslationAction {
     Once(bool),
     Auto(Option<bool>),
+    Question,
+    Highlight([u8; 3]),
 }
 
 #[derive(Default)]
@@ -133,6 +135,23 @@ impl TextSelection {
                     ui.ctx().copy_text(selection.text.clone());
                     ui.close();
                 }
+                if ui.button("AI：针对选区提问").clicked() {
+                    self.action = Some(TranslationAction::Question);
+                    ui.close();
+                }
+                ui.menu_button("高亮标注 · Ctrl+F2", |ui| {
+                    for (name, color) in [
+                        ("黄色", [255, 230, 70]),
+                        ("绿色", [120, 230, 140]),
+                        ("蓝色", [100, 190, 255]),
+                        ("粉色", [255, 150, 200]),
+                    ] {
+                        if ui.button(name).clicked() {
+                            self.action = Some(TranslationAction::Highlight(color));
+                            ui.close();
+                        }
+                    }
+                });
                 if ui.button("AI：结合上下文翻译").clicked() {
                     self.action = Some(TranslationAction::Once(false));
                     ui.close();

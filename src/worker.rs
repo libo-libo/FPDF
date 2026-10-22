@@ -1,5 +1,5 @@
 use crate::pdf::{
-    DocumentInfo, PageImage, PageText, PdfEngine, PdfError, PdfSelection, library_path,
+    DocumentInfo, PageImage, PageText, PdfEngine, PdfError, PdfSelection, SearchMatch, library_path,
 };
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -64,6 +64,10 @@ pub struct ReaderChannels {
     pub text_responses: mpsc::Receiver<TextResponse>,
     pub selection_requests: mpsc::Sender<SelectionRequest>,
     pub selection_responses: mpsc::Receiver<SelectionResponse>,
+    pub search_requests: mpsc::Sender<SearchRequest>,
+    pub search_responses: mpsc::Receiver<SearchResponse>,
+    pub highlight_requests: mpsc::Sender<HighlightRequest>,
+    pub highlight_responses: mpsc::Receiver<HighlightResponse>,
 }
 
 pub struct SelectionRequest {
@@ -81,6 +85,43 @@ pub struct SelectionResponse {
     pub id: u64,
     pub document_id: u64,
     pub result: Result<PdfSelection, PdfError>,
+}
+
+pub struct SearchRequest {
+    pub id: u64,
+    pub document_id: u64,
+    pub path: PathBuf,
+    pub password: String,
+    pub query: String,
+    pub case_sensitive: bool,
+    pub whole_word: bool,
+    pub rotation: u8,
+}
+pub struct SearchResponse {
+    pub id: u64,
+    pub document_id: u64,
+    pub scanned_pages: u32,
+    pub total_pages: u32,
+    pub matches: Vec<SearchMatch>,
+    pub done: bool,
+    pub truncated: bool,
+    pub error: Option<String>,
+}
+pub struct HighlightRequest {
+    pub id: u64,
+    pub document_id: u64,
+    pub path: PathBuf,
+    pub password: String,
+    pub selection: PdfSelection,
+    pub rotation: u8,
+    pub color: [u8; 3],
+    pub output: PathBuf,
+}
+pub struct HighlightResponse {
+    pub id: u64,
+    pub document_id: u64,
+    pub output: PathBuf,
+    pub result: Result<(), PdfError>,
 }
 
 struct Session {
@@ -192,12 +233,107 @@ pub fn spawn_reader(wake: impl Fn() + Send + 'static) -> ReaderChannels {
     let (text_out, text_result) = mpsc::channel();
     let (selection_tx, selection_rx) = mpsc::channel::<SelectionRequest>();
     let (selection_out, selection_result) = mpsc::channel();
+    let (search_tx, search_rx) = mpsc::channel::<SearchRequest>();
+    let (search_out, search_result) = mpsc::channel();
+    let (highlight_tx, highlight_rx) = mpsc::channel::<HighlightRequest>();
+    let (highlight_out, highlight_result) = mpsc::channel();
     std::thread::Builder::new()
         .name("fpdf-render".into())
         .spawn(move || {
             let mut session = Session::new();
             let mut pending = None;
+            let mut searching: Option<(SearchRequest, u32, usize, bool)> = None;
             loop {
+                if let Ok(highlight) = highlight_rx.try_recv() {
+                    let value = (|| -> Result<(), String> {
+                        if session.document_id != Some(highlight.document_id) {
+                            return Err("文档已切换，请重新选择文字。".into());
+                        }
+                        let engine = session.engine.as_ref().map_err(|e| e.message.clone())?;
+                        let mut document =
+                            crate::annotation::HighlightDocument::load(&highlight.path)?;
+                        if !document
+                            .matches_source(engine.source_bytes().map_err(|e| e.message.clone())?)
+                        {
+                            return Err("原 PDF 已被其他程序修改，请重新打开后再标注。".into());
+                        }
+                        document.add_selection(
+                            &highlight.selection,
+                            highlight.rotation,
+                            highlight.color,
+                        )?;
+                        document.save(&highlight.output)?;
+                        session.document_id = None;
+                        session.cache.clear();
+                        searching = None;
+                        Ok(())
+                    })()
+                    .map_err(|message| PdfError {
+                        message,
+                        password_required: false,
+                    });
+                    let _ = highlight_out.send(HighlightResponse {
+                        id: highlight.id,
+                        document_id: highlight.document_id,
+                        output: highlight.output,
+                        result: value,
+                    });
+                    wake();
+                }
+                if let Some(request) = search_rx.try_iter().last() {
+                    searching = if request.query.trim().is_empty() {
+                        None
+                    } else {
+                        Some((request, 0, 0, false))
+                    };
+                }
+                if let Some((request, page, seen, was_limited)) = searching.take() {
+                    let stale = session
+                        .document_id
+                        .is_some_and(|id| id > request.document_id);
+                    let prepared = if stale {
+                        Err(PdfError {
+                            message: "文档已切换。".into(),
+                            password_required: false,
+                        })
+                    } else {
+                        session.prepare(request.document_id, &request.path, &request.password)
+                    };
+                    let total = session.info.sizes.len() as u32;
+                    let result = prepared.and_then(|()| {
+                        session.engine.as_ref().map_err(Clone::clone)?.search_page(
+                            page,
+                            &request.query,
+                            request.case_sensitive,
+                            request.whole_word,
+                            request.rotation,
+                        )
+                    });
+                    let (mut matches, error) = match result {
+                        Ok(matches) => (matches, None),
+                        Err(e) => (Vec::new(), Some(e.message)),
+                    };
+                    let limited =
+                        was_limited || matches.len() >= 2000 || seen + matches.len() >= 20000;
+                    matches.truncate(20000usize.saturating_sub(seen));
+                    let scanned = (page + 1).min(total);
+                    let done = error.is_some() || scanned >= total || seen + matches.len() >= 20000;
+                    let next_seen = seen + matches.len();
+                    let _ = search_out.send(SearchResponse {
+                        id: request.id,
+                        document_id: request.document_id,
+                        scanned_pages: scanned,
+                        total_pages: total,
+                        matches,
+                        done,
+                        truncated: limited,
+                        error,
+                    });
+                    wake();
+                    if !done {
+                        searching = Some((request, page + 1, next_seen, limited));
+                    }
+                }
                 if let Some(selection) = selection_rx.try_iter().last() {
                     let value = if session
                         .document_id
@@ -264,7 +400,9 @@ pub fn spawn_reader(wake: impl Fn() + Send + 'static) -> ReaderChannels {
                 let mut r = if let Some(r) = pending.take() {
                     r
                 } else {
-                    match rx.recv_timeout(std::time::Duration::from_millis(20)) {
+                    match rx.recv_timeout(std::time::Duration::from_millis(
+                        if searching.is_some() { 0 } else { 20 },
+                    )) {
                         Ok(r) => r,
                         Err(mpsc::RecvTimeoutError::Timeout) => continue,
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -274,7 +412,7 @@ pub fn spawn_reader(wake: impl Fn() + Send + 'static) -> ReaderChannels {
                     r = next;
                 }
                 let prepared = session.prepare(r.document_id, &r.path, &r.password);
-                for target in &r.targets {
+                for (target_index, target) in r.targets.iter().enumerate() {
                     let value = prepared
                         .clone()
                         .and_then(|()| session.render(target.page, target.width, target.rotation));
@@ -300,6 +438,13 @@ pub fn spawn_reader(wake: impl Fn() + Send + 'static) -> ReaderChannels {
                     for next in rx.try_iter() {
                         pending = Some(next);
                     }
+                    if pending.is_none() && target_index + 1 < r.targets.len() {
+                        // Yield the native owner after each page so a large viewport
+                        // cannot starve cancellation, selection, or annotation saves.
+                        let mut remainder = r.clone();
+                        remainder.targets.drain(..=target_index);
+                        pending = Some(remainder);
+                    }
                     if pending.is_some() {
                         break;
                     }
@@ -314,5 +459,9 @@ pub fn spawn_reader(wake: impl Fn() + Send + 'static) -> ReaderChannels {
         text_responses: text_result,
         selection_requests: selection_tx,
         selection_responses: selection_result,
+        search_requests: search_tx,
+        search_responses: search_result,
+        highlight_requests: highlight_tx,
+        highlight_responses: highlight_result,
     }
 }

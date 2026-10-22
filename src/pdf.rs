@@ -82,6 +82,11 @@ struct Api {
     text_unicode: unsafe extern "system" fn(Handle, c_int) -> u32,
     text_get: unsafe extern "system" fn(Handle, c_int, c_int, *mut u16) -> c_int,
     text_close: unsafe extern "system" fn(Handle),
+    find_start: unsafe extern "system" fn(Handle, *const u16, c_ulong, c_int) -> Handle,
+    find_next: unsafe extern "system" fn(Handle) -> c_int,
+    find_index: unsafe extern "system" fn(Handle) -> c_int,
+    find_count: unsafe extern "system" fn(Handle) -> c_int,
+    find_close: unsafe extern "system" fn(Handle),
     text_at: unsafe extern "system" fn(Handle, f64, f64, f64, f64) -> c_int,
     text_rect_count: unsafe extern "system" fn(Handle, c_int, c_int) -> c_int,
     text_rect:
@@ -155,6 +160,11 @@ impl Api {
                 text_unicode: sym!("FPDFText_GetUnicode"),
                 text_get: sym!("FPDFText_GetText"),
                 text_close: sym!("FPDFText_ClosePage"),
+                find_start: sym!("FPDFText_FindStart"),
+                find_next: sym!("FPDFText_FindNext"),
+                find_index: sym!("FPDFText_GetSchResultIndex"),
+                find_count: sym!("FPDFText_GetSchCount"),
+                find_close: sym!("FPDFText_FindClose"),
                 text_at: sym!("FPDFText_GetCharIndexAtPos"),
                 text_rect_count: sym!("FPDFText_CountRects"),
                 text_rect: sym!("FPDFText_GetRect"),
@@ -205,7 +215,35 @@ pub struct PdfSelection {
     pub context: String,
     /// Normalized rectangles in the displayed (rotated) page.
     pub rects: Vec<[f32; 4]>,
+    /// Unrotated PDF user-space quad points, retained for persistent annotations.
+    pub quads: Vec<[f64; 8]>,
     pub truncated: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct SearchMatch {
+    pub page: u32,
+    pub index: usize,
+    pub rects: Vec<[f32; 4]>,
+    pub snippet: String,
+    /// UTF-8 byte boundaries of this exact occurrence inside the preview snippet.
+    pub snippet_match: [usize; 2],
+    pub matched_text: String,
+}
+
+fn search_snippet(before: &str, matched: &str, after: &str) -> (String, [usize; 2], String) {
+    let normalize = |text: &str| {
+        text.chars()
+            .map(|ch| if ch.is_whitespace() { ' ' } else { ch })
+            .collect::<String>()
+    };
+    let mut snippet = normalize(before);
+    let matched_text = normalize(matched);
+    let start = snippet.len();
+    snippet.push_str(&matched_text);
+    let end = snippet.len();
+    snippet.push_str(&normalize(after));
+    (snippet, [start, end], matched_text)
 }
 
 pub fn library_path() -> Result<PathBuf, PdfError> {
@@ -650,6 +688,7 @@ impl PdfEngine {
             );
             let rect_count = (self.api.text_rect_count)(text, begin, count).clamp(0, 256);
             let mut rects = Vec::new();
+            let mut quads = Vec::new();
             for index in 0..rect_count {
                 let (mut left, mut top, mut right, mut bottom) = (0.0, 0.0, 0.0, 0.0);
                 if (self.api.text_rect)(text, index, &mut left, &mut top, &mut right, &mut bottom)
@@ -680,6 +719,7 @@ impl PdfEngine {
                     }
                 }
                 if hi_x >= lo_x && hi_y >= lo_y {
+                    quads.push([left, top, right, top, left, bottom, right, bottom]);
                     rects.push([
                         lo_x as f32 / 10000.0,
                         lo_y as f32 / 10000.0,
@@ -693,8 +733,151 @@ impl PdfEngine {
                 text: selected,
                 context,
                 rects,
+                quads,
                 truncated: first.max(last) - begin + 1 > count,
             })
+        }
+    }
+
+    pub fn source_bytes(&self) -> Result<&[u8], PdfError> {
+        self.document
+            .as_ref()
+            .map(|d| d._bytes.as_slice())
+            .ok_or_else(|| PdfError::new("请先打开 PDF。"))
+    }
+
+    /// Searches one page on the PDFium-owning thread; the scheduler yields between pages.
+    pub fn search_page(
+        &self,
+        page: u32,
+        query: &str,
+        case_sensitive: bool,
+        whole_word: bool,
+        rotation: u8,
+    ) -> Result<Vec<SearchMatch>, PdfError> {
+        let doc = self
+            .document
+            .as_ref()
+            .ok_or_else(|| PdfError::new("请先打开 PDF。"))?;
+        if page >= doc.pages
+            || rotation > 3
+            || query.encode_utf16().count() > 1024
+            || query.contains('\0')
+        {
+            return Err(PdfError::new("查找词、页码或旋转参数无效。"));
+        }
+        if query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        // SAFETY: Native handles are scoped in dependency order on the render thread.
+        unsafe {
+            let handle = (self.api.load_page)(doc.handle, page as c_int);
+            if handle.is_null() {
+                return Err(PdfError::new("无法打开查找页面。"));
+            }
+            let _page = Guard {
+                handle,
+                close: self.api.close_page,
+            };
+            let text = (self.api.text_load)(handle);
+            if text.is_null() {
+                return Ok(Vec::new());
+            }
+            let _text = Guard {
+                handle: text,
+                close: self.api.text_close,
+            };
+            let needle: Vec<u16> = query.encode_utf16().chain(Some(0)).collect();
+            let flags = u32::from(case_sensitive) | (u32::from(whole_word) << 1);
+            let find = (self.api.find_start)(text, needle.as_ptr(), flags as c_ulong, 0);
+            if find.is_null() {
+                return Err(PdfError::new("无法启动文本查找。"));
+            }
+            let _find = Guard {
+                handle: find,
+                close: self.api.find_close,
+            };
+            let total = (self.api.text_count)(text).max(0);
+            let get = |from, count: i32| {
+                let mut buf = vec![0u16; count.max(0) as usize + 1];
+                let copied =
+                    (self.api.text_get)(text, from, count, buf.as_mut_ptr()).max(0) as usize;
+                buf.truncate(copied.min(buf.len()));
+                if buf.last() == Some(&0) {
+                    buf.pop();
+                }
+                String::from_utf16_lossy(&buf)
+            };
+            let mut matches = Vec::new();
+            while matches.len() < 2000 && (self.api.find_next)(find) != 0 {
+                let begin = (self.api.find_index)(find);
+                let count = (self.api.find_count)(find);
+                if begin < 0 || count <= 0 || begin.saturating_add(count) > total {
+                    continue;
+                }
+                let mut rects = Vec::new();
+                let rect_count = (self.api.text_rect_count)(text, begin, count).clamp(0, 256);
+                for index in 0..rect_count {
+                    let (mut left, mut top, mut right, mut bottom) = (0.0, 0.0, 0.0, 0.0);
+                    if (self.api.text_rect)(
+                        text,
+                        index,
+                        &mut left,
+                        &mut top,
+                        &mut right,
+                        &mut bottom,
+                    ) == 0
+                    {
+                        continue;
+                    }
+                    let (mut lx, mut ly, mut hx, mut hy) = (10000, 10000, 0, 0);
+                    for (x, y) in [(left, top), (right, top), (left, bottom), (right, bottom)] {
+                        let (mut dx, mut dy) = (0, 0);
+                        if (self.api.page_to_device)(
+                            handle,
+                            0,
+                            0,
+                            10000,
+                            10000,
+                            rotation as c_int,
+                            x,
+                            y,
+                            &mut dx,
+                            &mut dy,
+                        ) != 0
+                        {
+                            lx = lx.min(dx);
+                            ly = ly.min(dy);
+                            hx = hx.max(dx);
+                            hy = hy.max(dy);
+                        }
+                    }
+                    if hx >= lx && hy >= ly {
+                        rects.push([
+                            lx as f32 / 10000.0,
+                            ly as f32 / 10000.0,
+                            hx as f32 / 10000.0,
+                            hy as f32 / 10000.0,
+                        ]);
+                    }
+                }
+                let start = (begin - 65).max(0);
+                let end = (begin + count + 100).min(total);
+                let (snippet, snippet_match, matched_text) = search_snippet(
+                    &get(start, begin - start),
+                    &get(begin, count),
+                    &get(begin + count, end - begin - count),
+                );
+                matches.push(SearchMatch {
+                    page,
+                    index: matches.len(),
+                    rects,
+                    snippet,
+                    snippet_match,
+                    matched_text,
+                });
+            }
+            Ok(matches)
         }
     }
 
@@ -750,4 +933,25 @@ pub fn save_png(path: &Path, page: &PageImage) -> Result<(), Box<dyn std::error:
     encoder.set_depth(png::BitDepth::Eight);
     encoder.write_header()?.write_image_data(&page.rgba)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod search_preview_tests {
+    use super::search_snippet;
+
+    #[test]
+    fn exact_occurrence_preview_offsets_survive_unicode_and_multiline_whitespace() {
+        let (snippet, range, matched) = search_snippet(
+            "中文 first repeat 前文\r\n",
+            "跨行\r\nrepeat",
+            "\t后文 repeat",
+        );
+        assert_eq!(matched, "跨行  repeat");
+        assert_eq!(&snippet[range[0]..range[1]], matched);
+        assert_eq!(range[0], "中文 first repeat 前文  ".len());
+        assert!(snippet.is_char_boundary(range[0]) && snippet.is_char_boundary(range[1]));
+        let (snippet, range, matched) = search_snippet("中文 repeat ", "repeat", " repeat");
+        assert_ne!(snippet.find(&matched).unwrap(), range[0]);
+        assert_eq!(&snippet[range[0]..range[1]], "repeat");
+    }
 }

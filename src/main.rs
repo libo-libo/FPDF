@@ -6,6 +6,7 @@ mod color_palette;
 mod inline_outline;
 mod outline_editor;
 mod outline_folding;
+mod search_ui;
 mod text_selection;
 mod theme_settings;
 
@@ -13,11 +14,28 @@ use fpdf::pdf::{PdfEngine, library_path, save_png};
 use std::path::PathBuf;
 
 fn main() {
+    set_windows_app_id();
     if let Err(error) = run() {
         eprintln!("fpdf: {error}");
         std::process::exit(1);
     }
 }
+
+#[cfg(windows)]
+fn set_windows_app_id() {
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn SetCurrentProcessExplicitAppUserModelID(app_id: *const u16) -> i32;
+    }
+    let app_id: Vec<u16> = "libolibo.fpdf".encode_utf16().chain(Some(0)).collect();
+    // SAFETY: The stable, NUL-terminated identifier remains live for the call.
+    unsafe {
+        SetCurrentProcessExplicitAppUserModelID(app_id.as_ptr());
+    }
+}
+
+#[cfg(not(windows))]
+fn set_windows_app_id() {}
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
@@ -82,13 +100,42 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let reader_smoke = args.iter().any(|a| a == "--reading-features");
     let ai_smoke = args.iter().any(|a| a == "--ai-features");
     let grid_smoke = args.iter().any(|a| a == "--grid-features");
+    let search_smoke = args.iter().any(|a| a == "--search-features");
+    let settings_smoke = args.iter().any(|a| a == "--settings-features");
+    if settings_smoke {
+        if smoke.is_none() {
+            return Err("--settings-features requires --smoke-ui".into());
+        }
+        let expected = std::env::var_os("FPDF_SMOKE_APPDATA")
+            .ok_or("FPDF_SMOKE_APPDATA is required for isolated settings smoke")?;
+        let actual = std::env::var_os("APPDATA").ok_or("APPDATA is required for settings smoke")?;
+        if std::fs::canonicalize(PathBuf::from(&expected))?
+            != std::fs::canonicalize(PathBuf::from(&actual))?
+        {
+            return Err("Settings smoke requires APPDATA to match FPDF_SMOKE_APPDATA".into());
+        }
+        if PathBuf::from(actual).join("fpdf/agent.txt").exists() {
+            return Err(
+                "Settings smoke requires a fresh isolated APPDATA without AI config".into(),
+            );
+        }
+        for name in ["FPDF_SMOKE_ENDPOINT", "FPDF_SMOKE_KEY"] {
+            if std::env::var(name).is_ok_and(|value| !value.trim().is_empty()) {
+                continue;
+            }
+            return Err(format!("{name} is required for settings smoke").into());
+        }
+    }
+    if search_smoke && smoke.is_none() {
+        return Err("--search-features requires --smoke-ui".into());
+    }
     if grid_smoke && smoke.is_none() {
         return Err("--grid-features requires --smoke-ui".into());
     }
     if ai_smoke && smoke.is_none() {
         return Err("--ai-features requires --smoke-ui".into());
     }
-    let _outline_fixture = if outline_smoke || reader_smoke {
+    let _outline_fixture = if outline_smoke || reader_smoke || search_smoke || settings_smoke {
         if smoke.is_none() {
             return Err("--outline-features requires --smoke-ui".into());
         }
@@ -121,10 +168,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     || outline_smoke
                     || reader_smoke
                     || ai_smoke
-                    || grid_smoke,
+                    || grid_smoke
+                    || search_smoke
+                    || settings_smoke,
                 outline_smoke,
                 reader_smoke,
-                if ai_smoke {
+                if settings_smoke {
+                    app::ExtraSmoke::Settings
+                } else if search_smoke {
+                    app::ExtraSmoke::Search
+                } else if ai_smoke {
                     app::ExtraSmoke::Ai
                 } else if grid_smoke {
                     app::ExtraSmoke::Grid

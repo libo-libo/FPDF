@@ -1,7 +1,8 @@
 [package]
 name = "fpdf"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
+build = "build.rs"
 description = "A lightweight desktop PDF reader in Rust"
 license = "MIT"
 

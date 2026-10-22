@@ -148,6 +148,221 @@ fn outline_round_trip(pdf: &mut PdfEngine) {
     pdf.open(&fixture("reading-demo.pdf"), "").unwrap();
 }
 
+fn search_and_highlight_round_trip(pdf: &mut PdfEngine) {
+    use fpdf::annotation::HighlightDocument;
+    // Three identical occurrences in one context must select their own preview
+    // offsets instead of repeatedly marking the first literal occurrence.
+    let repeat_dir = tempfile::tempdir().unwrap();
+    let repeat_path = repeat_dir.path().join("repeat.pdf");
+    let mut repeated = lopdf::Document::load(fixture("reading-demo.pdf")).unwrap();
+    let first = repeated.get_pages()[&1];
+    let original = repeated
+        .get_dictionary(first)
+        .unwrap()
+        .get(b"Contents")
+        .unwrap()
+        .clone();
+    let stream = repeated.add_object(lopdf::Stream::new(
+        lopdf::Dictionary::new(),
+        b"BT /F1 12 Tf 46 200 Td (repeat repeat repeat) Tj ET".to_vec(),
+    ));
+    repeated
+        .get_dictionary_mut(first)
+        .unwrap()
+        .set("Contents", vec![original, stream.into()]);
+    repeated.save(&repeat_path).unwrap();
+    pdf.open(&repeat_path, "").unwrap();
+    let results = pdf.search_page(0, "repeat", false, true, 0).unwrap();
+    assert_eq!(results.len(), 3);
+    assert_ne!(
+        results[1].snippet.find("repeat").unwrap(),
+        results[1].snippet_match[0]
+    );
+    assert_ne!(
+        results[2].snippet.find("repeat").unwrap(),
+        results[2].snippet_match[0]
+    );
+    for result in results {
+        assert_eq!(
+            &result.snippet[result.snippet_match[0]..result.snippet_match[1]],
+            "repeat"
+        );
+        assert!(result.snippet.matches("repeat").count() >= 3);
+    }
+    pdf.open(&fixture("reading-demo.pdf"), "").unwrap();
+    let mut pages = Vec::new();
+    for page in 0..3 {
+        let results = pdf.search_page(page, "page", false, true, 0).unwrap();
+        for result in &results {
+            assert_eq!(result.page, page);
+            assert_eq!(result.matched_text.to_lowercase(), "page");
+            assert!(result.snippet.to_lowercase().contains("page"));
+            assert_eq!(
+                &result.snippet[result.snippet_match[0]..result.snippet_match[1]],
+                result.matched_text
+            );
+            assert!(!result.rects.is_empty());
+            assert!(
+                result
+                    .rects
+                    .iter()
+                    .flatten()
+                    .all(|x| (-0.01..=1.01).contains(x))
+            );
+        }
+        if !results.is_empty() {
+            pages.push(page);
+        }
+    }
+    assert_eq!(pages, vec![0, 2]);
+    assert!(
+        !pdf.search_page(0, "CLEARER", false, false, 0)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        pdf.search_page(0, "CLEARER", true, false, 0)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        pdf.search_page(0, "clear", false, true, 0)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !pdf.search_page(0, "clear", false, false, 0)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(pdf.search_page(0, "", false, false, 0).unwrap().is_empty());
+    assert!(pdf.search_page(3, "page", false, false, 0).is_err());
+    let found = pdf
+        .search_page(0, "clearer", false, true, 0)
+        .unwrap()
+        .remove(0);
+    let rect = found.rects[0];
+    let select = pdf
+        .select_text(
+            0,
+            [
+                f64::from(rect[0]) + 0.001,
+                f64::from(rect[1] + rect[3]) / 2.0,
+            ],
+            [
+                f64::from(rect[2]) - 0.001,
+                f64::from(rect[1] + rect[3]) / 2.0,
+            ],
+            0,
+        )
+        .unwrap();
+    assert!(select.text.contains("clearer"));
+    assert_eq!(select.quads.len(), select.rects.len());
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("highlight-original.pdf");
+    let output = dir.path().join("highlight-saved.pdf");
+    std::fs::copy(fixture("reading-demo.pdf"), &source).unwrap();
+    // Existing unrelated annotations must survive the new highlight.
+    let mut original = lopdf::Document::load(&source).unwrap();
+    let first = original.get_pages()[&1];
+    let existing=original.add_object(lopdf::dictionary!{"Type"=>"Annot","Subtype"=>"Text","Rect"=>vec![10.into(),10.into(),20.into(),20.into()],"Contents"=>lopdf::Object::string_literal("keep me")});
+    original
+        .get_dictionary_mut(first)
+        .unwrap()
+        .set("Annots", vec![lopdf::Object::Reference(existing)]);
+    original.save(&source).unwrap();
+    pdf.open(&source, "").unwrap();
+    let before = pdf.render(0, 612, 0).unwrap();
+    let mut edit = HighlightDocument::load(&source).unwrap();
+    assert!(edit.matches_source(pdf.source_bytes().unwrap()));
+    edit.add_selection(&select, 0, [255, 225, 40]).unwrap();
+    edit.save(&output).unwrap();
+    let saved = lopdf::Document::load(&output).unwrap();
+    let annots = saved
+        .get_dictionary(saved.get_pages()[&1])
+        .unwrap()
+        .get(b"Annots")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(annots.len(), 2);
+    assert_eq!(
+        saved
+            .get_dictionary(existing)
+            .unwrap()
+            .get(b"Contents")
+            .unwrap()
+            .as_str()
+            .unwrap(),
+        b"keep me"
+    );
+    let highlight = saved
+        .get_dictionary(annots[1].as_reference().unwrap())
+        .unwrap();
+    assert_eq!(
+        highlight.get(b"Subtype").unwrap().as_name().unwrap(),
+        b"Highlight"
+    );
+    assert_eq!(
+        highlight
+            .get(b"QuadPoints")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        select.quads.len() * 8
+    );
+    pdf.open(&output, "").unwrap();
+    let after = pdf.render(0, 612, 0).unwrap();
+    assert_ne!(
+        before.rgba, after.rgba,
+        "saved highlight must visibly render after reopen"
+    );
+    assert_eq!(before.text, after.text);
+    // A relative output resolving to the source itself must atomically replace
+    // that PDF without losing its original annotation or earlier highlights.
+    let relative_dir = tempfile::tempdir_in(".").unwrap();
+    let same_file = relative_dir.path().join("in-place.pdf");
+    std::fs::copy(&output, &same_file).unwrap();
+    let mut inplace = HighlightDocument::load(&same_file).unwrap();
+    inplace.add_selection(&select, 0, [120, 230, 140]).unwrap();
+    inplace.save(&same_file).unwrap();
+    let roundtrip = lopdf::Document::load(&same_file).unwrap();
+    assert_eq!(
+        roundtrip
+            .get_dictionary(roundtrip.get_pages()[&1])
+            .unwrap()
+            .get(b"Annots")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    let untouched = std::fs::read(&same_file).unwrap();
+    let mut inplace = HighlightDocument::load(&same_file).unwrap();
+    inplace.add_selection(&select, 0, [120, 230, 140]).unwrap();
+    assert!(
+        inplace
+            .save(&same_file.with_file_name("missing/fail.pdf"))
+            .is_err()
+    );
+    assert_eq!(std::fs::read(&same_file).unwrap(), untouched);
+    assert!(HighlightDocument::load(&fixture("password.pdf")).is_err());
+    let signed = dir.path().join("signed.pdf");
+    let mut sign_doc = lopdf::Document::load(&output).unwrap();
+    sign_doc.add_object(lopdf::dictionary!{"Type"=>"Sig","ByteRange"=>vec![0.into(),1.into(),2.into(),3.into()],"Contents"=>lopdf::Object::string_literal("fake signature")});
+    sign_doc.save(&signed).unwrap();
+    assert!(HighlightDocument::load(&signed).is_err());
+
+    let mut stale = HighlightDocument::load(&source).unwrap();
+    stale.add_selection(&select, 0, [255, 225, 40]).unwrap();
+    std::fs::write(&source, b"externally replaced").unwrap();
+    assert!(stale.save(&output).is_err());
+    assert_eq!(std::fs::read(&source).unwrap(), b"externally replaced");
+    pdf.open(&fixture("reading-demo.pdf"), "").unwrap();
+}
+
 // One end-to-end test deliberately serializes PDFium's process-global runtime.
 // Missing runtime is a real failure, never a skipped/false-positive success.
 #[test]
@@ -191,6 +406,7 @@ fn real_pdf_loading_rendering_and_worker_lifecycle() {
             .select_text(0, rotate(start), rotate(end), rotation)
             .unwrap();
         assert_eq!(rotated.text, selected.text);
+        assert_eq!(rotated.quads, selected.quads);
         assert!(
             rotated
                 .rects
@@ -249,6 +465,7 @@ fn real_pdf_loading_rendering_and_worker_lifecycle() {
     assert_eq!((rotated.width, rotated.height), (792, 612));
     let enlarged = pdf.render(0, 1224, 0).unwrap();
     assert_eq!((enlarged.width, enlarged.height), (1224, 1584));
+    search_and_highlight_round_trip(&mut pdf);
     outline_round_trip(&mut pdf);
     assert!(pdf.render(3, 612, 0).is_err());
     assert!(pdf.render(0, 0, 0).is_err());
@@ -392,7 +609,16 @@ fn real_pdf_loading_rendering_and_worker_lifecycle() {
     // A viewport batch must deliver every visible page and thumbnail, rather
     // than coalescing separate pages down to only the final item.
     use worker::{RenderTarget, ViewportRequest};
-    let channels = worker::spawn_reader(|| {});
+    let pause_next = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let worker_pause = pause_next.clone();
+    let (paused_tx, paused_rx) = std::sync::mpsc::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    let channels = worker::spawn_reader(move || {
+        if worker_pause.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            paused_tx.send(()).unwrap();
+            resume_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        }
+    });
     let (tx, rx) = (channels.requests, channels.responses);
     let targets = (0..3)
         .map(|page| RenderTarget {
@@ -464,6 +690,77 @@ fn real_pdf_loading_rendering_and_worker_lifecycle() {
         .unwrap();
     assert_eq!(selected.id, 9);
     assert!(selected.result.unwrap().text.contains("clearer"));
+    channels
+        .search_requests
+        .send(worker::SearchRequest {
+            id: 20,
+            document_id: 10,
+            path: fixture("reading-demo.pdf"),
+            password: String::new(),
+            query: "page".into(),
+            case_sensitive: false,
+            whole_word: true,
+            rotation: 0,
+        })
+        .unwrap();
+    let mut search_pages = Vec::new();
+    loop {
+        let response = channels
+            .search_responses
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        assert_eq!(response.id, 20);
+        assert!(response.error.is_none(), "{:?}", response.error);
+        assert_eq!(response.total_pages, 3);
+        search_pages.extend(response.matches.iter().map(|m| m.page));
+        if response.done {
+            assert_eq!(response.scanned_pages, 3);
+            break;
+        }
+    }
+    assert!(search_pages.contains(&0) && search_pages.contains(&2));
+    // Stop the owner after exactly one searched page, then enqueue cancellation
+    // and a replacement query. No remaining old-query pages may leak afterward.
+    pause_next.store(true, std::sync::atomic::Ordering::SeqCst);
+    let request = |id, query: &str| worker::SearchRequest {
+        id,
+        document_id: 10,
+        path: fixture("reading-demo.pdf"),
+        password: String::new(),
+        query: query.into(),
+        case_sensitive: false,
+        whole_word: false,
+        rotation: 0,
+    };
+    channels.search_requests.send(request(21, "page")).unwrap();
+    paused_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(
+        channels
+            .search_responses
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .id,
+        21
+    );
+    channels.search_requests.send(request(22, "")).unwrap();
+    channels.search_requests.send(request(23, "Every")).unwrap();
+    resume_tx.send(()).unwrap();
+    let mut replacement_matches = Vec::new();
+    loop {
+        let response = channels
+            .search_responses
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        assert_eq!(response.id, 23, "old search continued after cancellation");
+        replacement_matches.extend(response.matches);
+        if response.done {
+            assert_eq!(response.scanned_pages, 3);
+            break;
+        }
+    }
+    assert_eq!(replacement_matches.len(), 1);
+    assert_eq!(replacement_matches[0].page, 2);
+
     let rotated = RenderTarget {
         page: 2,
         width: 792,

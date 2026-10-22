@@ -29,9 +29,17 @@ pub enum ExtraSmoke {
     None,
     Ai,
     Grid,
+    Search,
+    Settings,
 }
 
 pub struct ReaderApp {
+    search: crate::search_ui::SearchUi,
+    highlight_requests: mpsc::Sender<worker::HighlightRequest>,
+    highlight_responses: mpsc::Receiver<worker::HighlightResponse>,
+    highlight_id: u64,
+    highlight_pending: Option<u64>,
+    highlight_color: [u8; 3],
     selection: crate::text_selection::TextSelection,
     selection_requests: mpsc::Sender<worker::SelectionRequest>,
     selection_responses: mpsc::Receiver<worker::SelectionResponse>,
@@ -74,8 +82,6 @@ pub struct ReaderApp {
     navigation_tab: NavigationTab,
     ribbon: u8,
     text_panel: bool,
-    find: bool,
-    query: String,
     cache: VecDeque<CachedPage>,
     errors: HashMap<RenderTarget, String>,
     wanted: Vec<RenderTarget>,
@@ -101,6 +107,8 @@ pub struct ReaderApp {
     smoke_reader: bool,
     smoke_ai: bool,
     smoke_grid: bool,
+    smoke_search: bool,
+    smoke_settings: bool,
     smoke_double_click: Option<(egui::Pos2, u8)>,
     smoke_drag: Option<(egui::Pos2, egui::Pos2, u8)>,
     visible_missing: usize,
@@ -153,6 +161,15 @@ impl ReaderApp {
             crate::theme_settings::ThemeSettings::load()
         };
         let mut app = Self {
+            search: crate::search_ui::SearchUi::new(
+                channels.search_requests,
+                channels.search_responses,
+            ),
+            highlight_requests: channels.highlight_requests,
+            highlight_responses: channels.highlight_responses,
+            highlight_id: 0,
+            highlight_pending: None,
+            highlight_color: [255, 230, 70],
             selection: crate::text_selection::TextSelection::default(),
             selection_requests: channels.selection_requests,
             selection_responses: channels.selection_responses,
@@ -195,8 +212,6 @@ impl ReaderApp {
             navigation_tab: NavigationTab::Thumbnails,
             ribbon: 0,
             text_panel: false,
-            find: false,
-            query: String::new(),
             cache: VecDeque::new(),
             errors: HashMap::new(),
             wanted: Vec::new(),
@@ -222,6 +237,8 @@ impl ReaderApp {
             smoke_reader,
             smoke_ai: matches!(smoke_extra, ExtraSmoke::Ai),
             smoke_grid: matches!(smoke_extra, ExtraSmoke::Grid),
+            smoke_search: matches!(smoke_extra, ExtraSmoke::Search),
+            smoke_settings: matches!(smoke_extra, ExtraSmoke::Settings),
             smoke_double_click: None,
             smoke_drag: None,
             visible_missing: 0,
@@ -387,6 +404,120 @@ impl ReaderApp {
             .pick_file()
         {
             self.open(path);
+        }
+    }
+    fn uninstall(&mut self, ctx: &egui::Context) {
+        if self.highlight_pending.is_some()
+            || self.outline_editor.is_some()
+            || self.inline_rename.is_some()
+        {
+            self.outline_notice = Some("请先完成或取消当前编辑，再卸载程序。".into());
+            return;
+        }
+        let Some(uninstaller) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.join("unins000.exe")))
+            .filter(|path| path.is_file())
+        else {
+            return;
+        };
+        let mut command = std::process::Command::new(uninstaller);
+        command.args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        match command.spawn() {
+            Ok(_) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Err(error) => self.outline_notice = Some(format!("无法启动卸载程序：{error}")),
+        }
+    }
+    fn open_search(&mut self) {
+        let selected = self.selection.current.as_ref().map(|s| s.text.as_str());
+        self.search.open(selected);
+        self.ai.visible = false;
+        self.text_panel = false;
+    }
+    fn highlight_selection(&mut self, save_as: bool) {
+        if self.highlight_pending.is_some() {
+            return;
+        }
+        if self.outline_editor.is_some() || self.inline_rename.is_some() {
+            self.selection.notice = "请先完成目录编辑，再保存高亮标注。".into();
+            return;
+        }
+        let (Some(selection), Some(path)) = (self.selection.current.clone(), self.path.clone())
+        else {
+            self.selection.notice = "请先双击单词或拖动选择文字，再添加高亮。".into();
+            return;
+        };
+        let output = if save_as {
+            let Some(output) = rfd::FileDialog::new()
+                .add_filter("PDF 文档", &["pdf"])
+                .set_file_name("标注副本.pdf")
+                .save_file()
+            else {
+                return;
+            };
+            output
+        } else {
+            path.clone()
+        };
+        self.highlight_id += 1;
+        let id = self.highlight_id;
+        if self
+            .highlight_requests
+            .send(worker::HighlightRequest {
+                id,
+                document_id: self.document_id,
+                path,
+                password: self.password.clone(),
+                selection,
+                rotation: self.rotation,
+                color: self.highlight_color,
+                output,
+            })
+            .is_ok()
+        {
+            self.highlight_pending = Some(id);
+            self.selection.notice = "正在保存高亮标注…".into();
+        } else {
+            self.selection.notice = "保存线程已退出，请重启程序。".into();
+        }
+    }
+    fn poll_highlights(&mut self) {
+        while let Ok(response) = self.highlight_responses.try_recv() {
+            if self.highlight_pending != Some(response.id) {
+                continue;
+            }
+            self.highlight_pending = None;
+            if response.document_id != self.document_id {
+                continue;
+            }
+            match response.result {
+                Ok(()) => {
+                    self.path = Some(response.output);
+                    self.document_id += 1;
+                    self.info = None;
+                    self.cache.clear();
+                    self.errors.clear();
+                    self.wanted.clear();
+                    self.last_plan.clear();
+                    self.selection.current = None;
+                    self.selection_id += 1;
+                    self.selection_committed_id = None;
+                    self.selection.notice = "高亮标注已保存到 PDF，重新打开仍会显示。".into();
+                    self.jump = Some((
+                        self.page,
+                        self.layout.placement(self.page).map_or(0.0, |p| {
+                            ((self.scroll_y - p.top) / p.height).clamp(0.0, 1.0)
+                        }),
+                    ));
+                    self.settled_frames = 0;
+                }
+                Err(error) => self.selection.notice = format!("高亮未保存：{}", error.message),
+            }
         }
     }
     fn set_page(&mut self, page: u32) {
@@ -559,7 +690,10 @@ impl ReaderApp {
             self.choose_file();
         }
         if find {
-            self.find = !self.find;
+            self.open_search();
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F2)) {
+            self.highlight_selection(false);
         }
         if fit {
             self.zoom = Zoom::FitWidth;
@@ -797,9 +931,16 @@ impl ReaderApp {
             .exact_height(34.0)
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
-                    if ui.button("文件").clicked() {
-                        self.choose_file();
-                    }
+                    ui.menu_button("文件",|ui| {
+                        if ui.button("打开 PDF…").clicked() {self.choose_file();ui.close();}
+                        let installed=std::env::current_exe().ok().and_then(|p|p.parent().map(|d|d.join("unins000.exe"))).is_some_and(|p|p.is_file());
+                        if installed {
+                            ui.separator();
+                            if ui.button("卸载 fpdf（清除全部配置）")
+                                .on_hover_text("一键移除安装程序文件、本程序保存的 AI 配置、主题和缓存；保留用户 PDF。")
+                                .clicked() {ui.close();self.uninstall(ctx);}
+                        }
+                    });
                     ui.add_space(10.0);
                     ui.selectable_value(&mut self.ribbon, 0, "开始");
                     ui.selectable_value(&mut self.ribbon, 1, "阅读");
@@ -987,7 +1128,9 @@ impl ReaderApp {
                                 if self.hit("rotate", ui.button("顺时针旋转")).clicked() {
                                     self.rotation = (self.rotation + 1) % 4;
                                 }
-                                ui.toggle_value(&mut self.find, "查找文本");
+                                if self.hit("open-search", ui.button("全文搜索")).clicked() {
+                                    self.open_search();
+                                }
                                 ui.label(RichText::new("阅读工具").small().color(self.muted()));
                             });
                             if self.ribbon != 1 {
@@ -1000,38 +1143,64 @@ impl ReaderApp {
                             }
                             ui.separator();
                             ui.vertical(|ui| {
+                                let can_mark = self.selection.current.is_some()
+                                    && self.highlight_pending.is_none();
+                                let mark = ui.add_enabled(can_mark, egui::Button::new("高亮标注"));
+                                if self
+                                    .hit("highlight-selection", mark)
+                                    .on_hover_text("选中文字后保存为 PDF 高亮标注 · Ctrl+F2")
+                                    .clicked()
+                                {
+                                    self.highlight_selection(false);
+                                }
+                                ui.menu_button("标注颜色", |ui| {
+                                    for (name, color) in [
+                                        ("黄色", [255, 230, 70]),
+                                        ("绿色", [120, 230, 140]),
+                                        ("蓝色", [100, 190, 255]),
+                                        ("粉色", [255, 150, 200]),
+                                    ] {
+                                        if ui
+                                            .selectable_label(self.highlight_color == color, name)
+                                            .clicked()
+                                        {
+                                            self.highlight_color = color;
+                                            ui.close();
+                                        }
+                                    }
+                                    ui.separator();
+                                    if ui
+                                        .add_enabled(
+                                            can_mark,
+                                            egui::Button::new("添加高亮并另存为…"),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.highlight_selection(true);
+                                        ui.close();
+                                    }
+                                });
+                                ui.label(RichText::new("文本标注").small().color(self.muted()));
+                            });
+                            ui.separator();
+                            ui.vertical(|ui| {
                                 let ai = ui.toggle_value(&mut self.ai.visible, "AI 辅助阅读");
+                                if ai.clicked() && self.ai.visible {
+                                    self.search.close();
+                                }
                                 self.hit("ai-reader", ai);
+                                if self
+                                    .hit("ask-selection", ui.button("针对选区提问"))
+                                    .clicked()
+                                {
+                                    self.search.close();
+                                    self.ai.open_question();
+                                }
                                 ui.label(RichText::new("pi agent").small().color(self.muted()));
                             });
                         });
                     });
             });
-        if self.find {
-            egui::TopBottomPanel::top("find").show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("当前页查找");
-                    ui.add(egui::TextEdit::singleline(&mut self.query).hint_text("输入关键词"));
-                    let count = if self.query.is_empty() {
-                        0
-                    } else {
-                        self.current_image().map_or(0, |p| {
-                            p.text
-                                .to_lowercase()
-                                .matches(&self.query.to_lowercase())
-                                .count()
-                        })
-                    };
-                    ui.label(format!("{count} 处匹配"));
-                    if ui.button("查看文本").clicked() {
-                        self.text_panel = true;
-                    }
-                    if ui.small_button("关闭").clicked() {
-                        self.find = false;
-                    }
-                });
-            });
-        }
     }
     fn navigation(&mut self, ctx: &egui::Context) {
         self.thumbnails.clear();
@@ -1612,6 +1781,7 @@ impl ReaderApp {
                             ),
                             egui::StrokeKind::Outside,
                         );
+                        self.search.paint(ui, rect, p.page);
                         let response = self.selection.page(ui, rect, p.page, self.rotation);
                         self.hit(&format!("selection-page-{}", p.page), response.clone());
                         if self.layout.columns > 1 {
@@ -2086,7 +2256,199 @@ impl ReaderApp {
             self.settled_frames = 0;
         }
         if self.settled_frames > 8 {
-            if self.smoke_grid && self.smoke_step < 16 {
+            if self.smoke_settings && self.smoke_step < 12 {
+                match self.smoke_step {
+                    0 => self.click_test_control("ask-selection"),
+                    1 => {
+                        assert!(
+                            self.ai.controls.contains_key("ai-config-endpoint"),
+                            "Missing config must open inline setup immediately"
+                        );
+                        self.click_test_control("ai-config-endpoint");
+                    }
+                    2 => self.type_test_title(&std::env::var("FPDF_SMOKE_ENDPOINT").unwrap()),
+                    3 => self.click_test_control("ai-config-key"),
+                    4 => self.type_test_title(&std::env::var("FPDF_SMOKE_KEY").unwrap()),
+                    5 => self.click_test_control("ai-config-save"),
+                    6 => {
+                        if !self.ai.ready {
+                            ctx.request_repaint_after(Duration::from_millis(100));
+                            return;
+                        }
+                        let path = PathBuf::from(std::env::var_os("APPDATA").unwrap())
+                            .join("fpdf/agent.txt");
+                        let saved = std::fs::read_to_string(path)
+                            .expect("Installed settings must persist in isolated APPDATA");
+                        let lines: Vec<_> = saved.lines().collect();
+                        assert!(
+                            lines.first().is_some_and(|line| *line
+                                == std::env::var("FPDF_SMOKE_ENDPOINT")
+                                    .unwrap()
+                                    .trim_end_matches('/')),
+                            "Saved endpoint must match UI input"
+                        );
+                        assert!(
+                            lines.get(1).is_some_and(
+                                |line| *line == std::env::var("FPDF_SMOKE_KEY").unwrap()
+                            ),
+                            "Saved key must match masked UI input"
+                        );
+                        self.ai.busy = true;
+                        self.click_test_control("ai-config");
+                    }
+                    7 => {
+                        assert!(
+                            self.ai.controls.contains_key("ai-config-endpoint"),
+                            "API setup must remain available while AI is busy"
+                        );
+                        self.ai.busy = false;
+                        self.click_test_control("ai-config");
+                    }
+                    8 => {
+                        assert!(
+                            !self.ai.controls.contains_key("ai-config-endpoint"),
+                            "Close setup before capturing screenshots"
+                        );
+                        self.click_test_control("ai-question-input");
+                    }
+                    9 => self.type_test_title("请说明当前页内容，并引用页码。"),
+                    10 => self.click_test_control("ai-question-send"),
+                    11 => {
+                        if self.ai.is_working() {
+                            ctx.request_repaint_after(Duration::from_millis(100));
+                            return;
+                        }
+                        self.ai.assert_smoke_answer();
+                        assert_eq!(self.ai.translation_run_count(), 0);
+                        println!(
+                            "Installed settings UI verified: fresh isolated APPDATA, masked API config save, actual connection, setup usable while busy, direct question and cited answer without translation"
+                        );
+                    }
+                    _ => {}
+                }
+                self.smoke_step += 1;
+                self.settled_frames = 0;
+                ctx.request_repaint();
+            } else if self.smoke_search && self.smoke_step < 17 {
+                match self.smoke_step {
+                    0 => {
+                        self.smoke_events = vec![egui::Event::Key {
+                            key: egui::Key::F,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::CTRL,
+                        }];
+                    }
+                    1 => {
+                        assert!(self.search.visible, "Ctrl+F must open document search");
+                        self.click_test_control("search-input");
+                    }
+                    2 => self.type_test_title("page"),
+                    3 => {
+                        if self.search.busy || self.search.matches.is_empty() {
+                            ctx.request_repaint_after(Duration::from_millis(100));
+                            return;
+                        }
+                        assert!(self.search.matches.iter().any(|m| m.page == 0));
+                        assert!(
+                            self.search.matches.iter().any(|m| m.page == 2),
+                            "Search must include pages outside current viewport"
+                        );
+                        self.click_test_control("search-result-first");
+                    }
+                    4 => {
+                        assert_eq!(self.search.selected, Some(0));
+                        assert_eq!(self.page, self.search.matches[0].page);
+                        assert!(
+                            self.search.matches[0]
+                                .rects
+                                .iter()
+                                .all(|r| r[2] > r[0] && r[3] > r[1])
+                        );
+                        self.click_test_control("search-next");
+                    }
+                    5 => {
+                        assert_eq!(self.search.selected, Some(1));
+                        self.click_test_control("search-whole-word");
+                    }
+                    6 => {
+                        if self.search.busy || self.search.matches.is_empty() {
+                            ctx.request_repaint_after(Duration::from_millis(100));
+                            return;
+                        }
+                        self.click_test_control("search-close");
+                    }
+                    7 => {
+                        assert!(!self.search.visible);
+                        self.click_test_control("ask-selection");
+                    }
+                    8 => {
+                        assert!(
+                            self.ai.visible && self.ai.controls.contains_key("ai-question-input"),
+                            "Question input must be directly visible before any translation"
+                        );
+                        assert_eq!(self.ai.translation_run_count(), 0);
+                        self.ai.visible = false;
+                        self.goto(2);
+                    }
+                    9 => {
+                        let rect = self.smoke_hits["selection-page-2"];
+                        let point = rect.min
+                            + Vec2::new(150.0 / 612.0 * rect.width(), 72.0 / 792.0 * rect.height());
+                        self.smoke_double_click = Some((point, 42));
+                    }
+                    10 => {
+                        if self
+                            .selection
+                            .current
+                            .as_ref()
+                            .is_none_or(|s| s.text != "page")
+                        {
+                            ctx.request_repaint_after(Duration::from_millis(100));
+                            return;
+                        }
+                        self.smoke_document_id = self.document_id;
+                        self.click_test_control("highlight-selection");
+                    }
+                    11 => {
+                        if self.highlight_pending.is_some() {
+                            ctx.request_repaint_after(Duration::from_millis(100));
+                            return;
+                        }
+                        assert_eq!(
+                            self.document_id,
+                            self.smoke_document_id + 1,
+                            "Highlight must save and invalidate page cache"
+                        );
+                        assert!(self.selection.notice.contains("已保存"));
+                        self.goto(2);
+                    }
+                    12 => self.click_test_control("ask-selection"),
+                    13 => {
+                        assert!(self.ai.controls.contains_key("ai-question-input"));
+                        self.ai.visible = false;
+                        self.selection.current = None;
+                        self.open_search();
+                    }
+                    14 => self.click_test_control("search-input"),
+                    15 => self.type_test_title("page"),
+                    16 => {
+                        if self.search.busy || self.search.matches.is_empty() {
+                            ctx.request_repaint_after(Duration::from_millis(100));
+                            return;
+                        }
+                        self.click_test_control("search-next");
+                        println!(
+                            "Whole-PDF Ctrl+F search, right snippets, hit geometry, next result, whole-word settings, saved highlight/reload and direct AI question entry verified"
+                        );
+                    }
+                    _ => {}
+                }
+                self.smoke_step += 1;
+                self.settled_frames = 0;
+                ctx.request_repaint();
+            } else if self.smoke_grid && self.smoke_step < 16 {
                 match self.smoke_step {
                     0 | 3 | 6 | 9 | 12 => self.click_test_control("zoom-percent"),
                     1 => self.type_test_title("50%"),
@@ -2345,6 +2707,8 @@ impl ReaderApp {
                 && !self.smoke_reader
                 && !self.smoke_ai
                 && !self.smoke_grid
+                && !self.smoke_search
+                && !self.smoke_settings
                 && self.smoke_step < 30
             {
                 match self.smoke_step {
@@ -2579,6 +2943,8 @@ impl ReaderApp {
                     && !self.smoke_reader
                     && !self.smoke_ai
                     && !self.smoke_grid
+                    && !self.smoke_search
+                    && !self.smoke_settings
                 {
                     assert_eq!(self.theme, PaperTheme::Green);
                     assert!(self.layout.pages.len() >= 3);
@@ -2702,7 +3068,15 @@ impl eframe::App for ReaderApp {
                 Some("目录名称有未保存修改，请按 Enter 保存或 Esc 取消后关闭。".into());
         }
         self.poll_inline_name();
+        self.poll_highlights();
         self.poll(ctx);
+        self.search.poll(
+            self.document_id,
+            self.path.as_deref(),
+            &self.password,
+            self.rotation,
+            self.pages(),
+        );
         for response in self.selection_responses.try_iter() {
             if response.document_id == self.document_id && response.id == self.selection_id {
                 match response.result {
@@ -2886,16 +3260,31 @@ impl eframe::App for ReaderApp {
             .and_then(|p| p.file_name())
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if let Some(page) = self.ai.show(
-            ctx,
-            self.info.as_ref(),
-            &title,
-            self.page,
-            self.selection.current.as_ref(),
-        ) {
+        if let Some(hit) = self.search.show(ctx) {
+            self.goto(hit.page);
+            let y = hit.rects.first().map_or(0.0, |r| (r[1] - 0.12).max(0.0));
+            self.jump = Some((hit.page, y));
+        }
+        if !self.search.visible
+            && let Some(page) = self.ai.show(
+                ctx,
+                self.info.as_ref(),
+                &title,
+                self.page,
+                self.selection.current.as_ref(),
+            )
+        {
             self.goto(page);
         }
-        if self.smoke_ai {
+        if self.smoke_features {
+            self.smoke_hits.extend(
+                self.search
+                    .controls
+                    .iter()
+                    .map(|(k, r)| (k.to_string(), *r)),
+            );
+        }
+        if self.smoke_ai || self.smoke_settings {
             self.smoke_hits.extend(
                 self.ai
                     .controls
@@ -2940,13 +3329,24 @@ impl eframe::App for ReaderApp {
         if let Some(mode) = self.selection.action.take() {
             match mode {
                 crate::text_selection::TranslationAction::Once(detailed) => {
+                    self.search.close();
                     if let Some(selection) = self.selection.current.clone() {
                         self.ai.request_translation(selection, detailed);
                     }
                 }
-                crate::text_selection::TranslationAction::Auto(mode) => self
-                    .ai
-                    .set_auto_translation(mode, self.selection.current.as_ref()),
+                crate::text_selection::TranslationAction::Auto(mode) => {
+                    self.search.close();
+                    self.ai
+                        .set_auto_translation(mode, self.selection.current.as_ref());
+                }
+                crate::text_selection::TranslationAction::Question => {
+                    self.search.close();
+                    self.ai.open_question();
+                }
+                crate::text_selection::TranslationAction::Highlight(color) => {
+                    self.highlight_color = color;
+                    self.highlight_selection(false);
+                }
             }
         }
         if let Some(editor) = &mut self.outline_editor {
