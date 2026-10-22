@@ -1,5 +1,15 @@
 # Validation
 
+## v0.8.2 unified release — 2026-10-22
+
+- Rust formatting and all-target Clippy passed. The suite contains 30 Rust tests, including actual modal button clicks for cancel and confirm.
+- Native GUI validation opens whole-document search and AI together, independently closes each pane, retains active AI state while navigating matches, and checks usable non-overlapping controls at 900 × 680.
+- Two separate reader processes simultaneously opened the original 3-page and 16-page fixtures using the production new-window command; both rendered and exited successfully.
+- The reader's uninstall action now requires explicit confirmation; cancel and Escape return to reading. The Start menu uninstall shortcut opens the standard installer confirmation instead of supplying silent arguments.
+- All 3 AI bridge tests passed. Isolated v0.8.2 installation matched 110 payload hashes, rendered a real PDF, and removed owned settings/logs while preserving a user PDF on uninstall.
+- The six-page Chinese guide was rendered and visually checked. The installer, PDF, ZIP contents and source passed private endpoint/key/token checks; the portable ZIP matched all 110 distribution files.
+- This release incorporates the withdrawn v0.8.0 and v0.8.1 fixes. Their Git tags and source history remain available; their GitHub Releases were withdrawn before this unified publication.
+
 ## v0.8.0 local repair — 2026-10-22
 
 - Format and all-target Clippy checks passed; 28 Rust tests and 2 AI bridge tests passed.
@@ -34,4 +44,4 @@ The installer was silently installed into an isolated validation directory. All 
 
 ## Limits
 
-Fixture and local validation do not establish compatibility with every complex PDF. There is no OCR, cross-platform support or whole-document search. The installer is unsigned.
+Fixture and local validation do not establish compatibility with every complex PDF. There is no OCR or cross-platform support. The installer is unsigned.

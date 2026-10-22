@@ -9,6 +9,7 @@ mod outline_folding;
 mod search_ui;
 mod text_selection;
 mod theme_settings;
+mod window_actions;
 
 use fpdf::pdf::{PdfEngine, library_path, save_png};
 use std::path::PathBuf;

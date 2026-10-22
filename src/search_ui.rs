@@ -7,6 +7,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 pub struct SearchUi {
+    pub width_limit: Option<f32>,
     pub visible: bool,
     pub query: String,
     pub matches: Vec<SearchMatch>,
@@ -35,6 +36,7 @@ impl SearchUi {
         responses: mpsc::Receiver<SearchResponse>,
     ) -> Self {
         Self {
+            width_limit: None,
             visible: false,
             query: String::new(),
             matches: vec![],
@@ -171,11 +173,14 @@ impl SearchUi {
         let mut jump = None;
         let mut close = false;
         self.controls.clear();
+        let maximum = self
+            .width_limit
+            .unwrap_or((ctx.content_rect().width() * 0.55).max(260.0));
         egui::SidePanel::right("document-search")
             .resizable(true)
-            .default_width(330.0)
-            .min_width(260.0)
-            .max_width((ctx.content_rect().width() * 0.55).max(260.0))
+            .default_width(330.0_f32.min(maximum))
+            .min_width(220.0_f32.min(maximum))
+            .max_width(maximum)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.heading("全文搜索");

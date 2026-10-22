@@ -1,5 +1,5 @@
 ﻿#ifndef AppVersion
-  #define AppVersion "0.8.1"
+  #define AppVersion "0.8.2"
 #endif
 
 #ifdef TestAppId
@@ -61,7 +61,7 @@ Name: "{group}\{#ShortcutName}"; Filename: "{app}\fpdf.exe"; IconFilename: "{app
 Name: "{group}\User Guide"; Filename: "{app}\fpdf-user-guide-zh-CN.pdf"
 Name: "{autodesktop}\{#ShortcutName}"; Filename: "{app}\fpdf.exe"; IconFilename: "{app}\fpdf.exe"; IconIndex: 0; AppUserModelID: "libolibo.fpdf"; Tasks: desktopicon
 
-Name: "{group}\卸载 fpdf（清除全部配置）"; Filename: "{uninstallexe}"; Parameters: "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"; IconFilename: "{app}\fpdf.exe"; IconIndex: 0
+Name: "{group}\卸载 fpdf（清除全部配置）"; Filename: "{uninstallexe}"; IconFilename: "{app}\fpdf.exe"; IconIndex: 0
 
 [UninstallDelete]
 Type: files; Name: "{app}\agent.txt"

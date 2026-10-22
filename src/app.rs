@@ -34,6 +34,8 @@ pub enum ExtraSmoke {
 }
 
 pub struct ReaderApp {
+    smoke_windows: Vec<std::process::Child>,
+    uninstall_confirm: bool,
     search: crate::search_ui::SearchUi,
     highlight_requests: mpsc::Sender<worker::HighlightRequest>,
     highlight_responses: mpsc::Receiver<worker::HighlightResponse>,
@@ -161,6 +163,8 @@ impl ReaderApp {
             crate::theme_settings::ThemeSettings::load()
         };
         let mut app = Self {
+            smoke_windows: vec![],
+            uninstall_confirm: false,
             search: crate::search_ui::SearchUi::new(
                 channels.search_requests,
                 channels.search_responses,
@@ -406,6 +410,11 @@ impl ReaderApp {
             self.open(path);
         }
     }
+    fn new_window(&mut self, path: Option<PathBuf>) {
+        if let Err(error) = crate::window_actions::spawn_window(path.as_deref()) {
+            self.outline_notice = Some(format!("无法打开新窗口：{error}"));
+        }
+    }
     fn uninstall(&mut self, ctx: &egui::Context) {
         if self.highlight_pending.is_some()
             || self.outline_editor.is_some()
@@ -436,7 +445,6 @@ impl ReaderApp {
     fn open_search(&mut self) {
         let selected = self.selection.current.as_ref().map(|s| s.text.as_str());
         self.search.open(selected);
-        self.ai.visible = false;
         self.text_panel = false;
     }
     fn highlight_selection(&mut self, save_as: bool) {
@@ -673,6 +681,9 @@ impl ReaderApp {
         }
     }
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::N)) {
+            self.new_window(None);
+        }
         let (open, find, fit, prev, next, home, end, back, forward) = ctx.input_mut(|i| {
             (
                 i.consume_key(egui::Modifiers::CTRL, egui::Key::O),
@@ -932,13 +943,18 @@ impl ReaderApp {
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.menu_button("文件",|ui| {
+                        if ui.button("新窗口 · Ctrl+N").clicked() {self.new_window(None);ui.close();}
+                        if ui.button("在新窗口打开 PDF…").clicked() {
+                            if let Some(path)=rfd::FileDialog::new().add_filter("PDF 文档", &["pdf"]).pick_file() {self.new_window(Some(path));}
+                            ui.close();
+                        }
                         if ui.button("打开 PDF…").clicked() {self.choose_file();ui.close();}
                         let installed=std::env::current_exe().ok().and_then(|p|p.parent().map(|d|d.join("unins000.exe"))).is_some_and(|p|p.is_file());
                         if installed {
                             ui.separator();
                             if ui.button("卸载 fpdf（清除全部配置）")
                                 .on_hover_text("一键移除安装程序文件、本程序保存的 AI 配置、主题和缓存；保留用户 PDF。")
-                                .clicked() {ui.close();self.uninstall(ctx);}
+                                .clicked() {ui.close();self.uninstall_confirm=true;}
                         }
                     });
                     ui.add_space(10.0);
@@ -1185,15 +1201,11 @@ impl ReaderApp {
                             ui.separator();
                             ui.vertical(|ui| {
                                 let ai = ui.toggle_value(&mut self.ai.visible, "AI 辅助阅读");
-                                if ai.clicked() && self.ai.visible {
-                                    self.search.close();
-                                }
                                 self.hit("ai-reader", ai);
                                 if self
                                     .hit("ask-selection", ui.button("针对选区提问"))
                                     .clicked()
                                 {
-                                    self.search.close();
                                     self.ai.open_question();
                                 }
                                 ui.label(RichText::new("pi agent").small().color(self.muted()));
@@ -1530,6 +1542,9 @@ impl ReaderApp {
             .frame(egui::Frame::new().fill(self.background()))
             .show(ctx, |ui| {
                 self.reader_center = ui.max_rect().center();
+                if self.smoke_features {
+                    self.smoke_hits.insert("reader-area".into(), ui.max_rect());
+                }
                 if self.path.is_none() {
                     ui.vertical_centered(|ui| {
                         ui.add_space((ui.available_height() * 0.25).max(30.0));
@@ -2329,7 +2344,7 @@ impl ReaderApp {
                 self.smoke_step += 1;
                 self.settled_frames = 0;
                 ctx.request_repaint();
-            } else if self.smoke_search && self.smoke_step < 17 {
+            } else if self.smoke_search && self.smoke_step < 27 {
                 match self.smoke_step {
                     0 => {
                         self.smoke_events = vec![egui::Event::Key {
@@ -2441,6 +2456,117 @@ impl ReaderApp {
                         self.click_test_control("search-next");
                         println!(
                             "Whole-PDF Ctrl+F search, right snippets, hit geometry, next result, whole-word settings, saved highlight/reload and direct AI question entry verified"
+                        );
+                    }
+                    17 => self.click_test_control("ask-selection"),
+                    18 => {
+                        assert!(
+                            self.search.visible && self.ai.visible,
+                            "Search and AI must coexist"
+                        );
+                        assert!(self.ai.controls.contains_key("ai-question-input"));
+                        assert!(self.search.controls.contains_key("search-input"));
+                        self.ai.busy = true;
+                        self.click_test_control("search-next");
+                    }
+                    19 => {
+                        assert!(
+                            self.search.visible && self.ai.visible && self.ai.busy,
+                            "Search must preserve the active AI task"
+                        );
+                        self.ai.busy = false;
+                        self.click_test_control("search-close");
+                    }
+                    20 => {
+                        assert!(
+                            !self.search.visible && self.ai.visible,
+                            "Closing search must retain AI"
+                        );
+                        self.open_search();
+                    }
+                    21 => {
+                        assert!(
+                            self.search.visible && self.ai.visible,
+                            "Opening search must retain AI"
+                        );
+                        self.click_test_control("ai-close");
+                    }
+                    22 => {
+                        assert!(
+                            self.search.visible && !self.ai.visible,
+                            "Closing AI must retain search"
+                        );
+                        self.ai.open_question();
+                        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                        for (name, shot) in [
+                            ("reading-demo.pdf", "multi-window-a.png"),
+                            ("grid-demo.pdf", "multi-window-b.png"),
+                        ] {
+                            let fixture = root.join("tests/fixtures").join(name);
+                            let screenshot = self
+                                .screenshot
+                                .as_ref()
+                                .unwrap()
+                                .parent()
+                                .unwrap()
+                                .join(shot);
+                            let mut command =
+                                crate::window_actions::window_command(Some(&fixture)).unwrap();
+                            command
+                                .arg("--smoke-ui")
+                                .arg(&fixture)
+                                .arg("--screenshot")
+                                .arg(screenshot);
+                            self.smoke_windows.push(command.spawn().unwrap());
+                        }
+                        assert_ne!(self.smoke_windows[0].id(), self.smoke_windows[1].id());
+                        assert!(
+                            self.smoke_windows
+                                .iter_mut()
+                                .all(|c| c.try_wait().unwrap().is_none())
+                        );
+                    }
+                    23 => {
+                        for child in &mut self.smoke_windows {
+                            let Some(status) = child.try_wait().unwrap() else {
+                                ctx.request_repaint_after(Duration::from_millis(100));
+                                return;
+                            };
+                            assert!(
+                                status.success(),
+                                "Each independent window must render its own PDF"
+                            );
+                        }
+                        self.uninstall_confirm = true;
+                    }
+                    24 => {
+                        assert!(self.uninstall_confirm);
+                        self.click_test_control("uninstall-cancel");
+                    }
+                    25 => {
+                        assert!(
+                            !self.uninstall_confirm,
+                            "Cancel must not uninstall or close the reader"
+                        );
+                        assert!(self.search.visible && self.ai.visible);
+                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                            900.0, 680.0,
+                        )));
+                    }
+                    26 => {
+                        assert!(
+                            self.smoke_hits["reader-area"].width() >= 150.0,
+                            "Both sidebars must leave a usable reader area"
+                        );
+                        assert!(
+                            !self.search.controls["search-input"]
+                                .intersects(self.ai.controls["ai-question-input"])
+                        );
+                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                            1200.0, 860.0,
+                        )));
+                        println!(
+                            "Search/AI coexistence, independent closes, retained active AI state, compact layout, multiple PDF windows and cancel-safe uninstall confirmed"
                         );
                     }
                     _ => {}
@@ -3053,6 +3179,11 @@ impl eframe::App for ReaderApp {
         }
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.uninstall_confirm
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.uninstall_confirm = false;
+        }
         if ctx.input(|i| i.viewport().close_requested())
             && (self
                 .outline_editor
@@ -3116,7 +3247,11 @@ impl eframe::App for ReaderApp {
                 });
             }
         }
-        if self.outline_editor.is_none() && self.inline_rename.is_none() && !self.rgb_window {
+        if self.outline_editor.is_none()
+            && self.inline_rename.is_none()
+            && !self.rgb_window
+            && !self.uninstall_confirm
+        {
             self.shortcuts(ctx);
         }
         self.apply_theme(ctx);
@@ -3260,20 +3395,22 @@ impl eframe::App for ReaderApp {
             .and_then(|p| p.file_name())
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
+        let shared_limit = (self.search.visible && self.ai.visible)
+            .then(|| ((ctx.available_rect().width() - 180.0) / 2.0).max(160.0));
+        self.search.width_limit = shared_limit;
+        self.ai.width_limit = shared_limit;
         if let Some(hit) = self.search.show(ctx) {
             self.goto(hit.page);
             let y = hit.rects.first().map_or(0.0, |r| (r[1] - 0.12).max(0.0));
             self.jump = Some((hit.page, y));
         }
-        if !self.search.visible
-            && let Some(page) = self.ai.show(
-                ctx,
-                self.info.as_ref(),
-                &title,
-                self.page,
-                self.selection.current.as_ref(),
-            )
-        {
+        if let Some(page) = self.ai.show(
+            ctx,
+            self.info.as_ref(),
+            &title,
+            self.page,
+            self.selection.current.as_ref(),
+        ) {
             self.goto(page);
         }
         if self.smoke_features {
@@ -3284,7 +3421,7 @@ impl eframe::App for ReaderApp {
                     .map(|(k, r)| (k.to_string(), *r)),
             );
         }
-        if self.smoke_ai || self.smoke_settings {
+        if self.smoke_ai || self.smoke_settings || self.smoke_search {
             self.smoke_hits.extend(
                 self.ai
                     .controls
@@ -3329,18 +3466,15 @@ impl eframe::App for ReaderApp {
         if let Some(mode) = self.selection.action.take() {
             match mode {
                 crate::text_selection::TranslationAction::Once(detailed) => {
-                    self.search.close();
                     if let Some(selection) = self.selection.current.clone() {
                         self.ai.request_translation(selection, detailed);
                     }
                 }
                 crate::text_selection::TranslationAction::Auto(mode) => {
-                    self.search.close();
                     self.ai
                         .set_auto_translation(mode, self.selection.current.as_ref());
                 }
                 crate::text_selection::TranslationAction::Question => {
-                    self.search.close();
                     self.ai.open_question();
                 }
                 crate::text_selection::TranslationAction::Highlight(color) => {
@@ -3368,6 +3502,21 @@ impl eframe::App for ReaderApp {
             }
         }
         self.custom_theme_window(ctx);
+        if self.uninstall_confirm {
+            let mut controls = HashMap::new();
+            match crate::window_actions::confirm_uninstall(ctx, &mut controls) {
+                crate::window_actions::UninstallChoice::Keep => {}
+                crate::window_actions::UninstallChoice::Cancel => self.uninstall_confirm = false,
+                crate::window_actions::UninstallChoice::Confirm => {
+                    self.uninstall_confirm = false;
+                    self.uninstall(ctx);
+                }
+            }
+            if self.smoke_features {
+                self.smoke_hits
+                    .extend(controls.into_iter().map(|(k, r)| (k.to_string(), r)));
+            }
+        }
         self.smoke(ctx);
     }
 }

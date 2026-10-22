@@ -31,6 +31,7 @@ impl Prompt {
 
 #[derive(Default)]
 pub struct AiReader {
+    pub width_limit: Option<f32>,
     pub controls: std::collections::HashMap<&'static str, egui::Rect>,
     pub visible: bool,
     child: Option<Child>,
@@ -405,13 +406,16 @@ impl AiReader {
         {
             self.connect(ctx, info, title);
         }
-        egui::SidePanel::right("ai-reader").default_width(340.0).min_width(260.0).max_width(600.0).show(ctx, |ui| {
+        let maximum = self.width_limit.unwrap_or(600.0);
+        egui::SidePanel::right("ai-reader").default_width(340.0_f32.min(maximum)).min_width(220.0_f32.min(maximum)).max_width(maximum).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.strong("AI 辅助阅读");
                 ui.label(egui::RichText::new("pi agent").small());
-                if ui.small_button("关闭").clicked() { self.visible = false; }
+                let close=ui.small_button("关闭");
+                self.controls.insert("ai-close",close.rect);
+                if close.clicked() { self.visible = false; }
             });
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 let connect = ui.button(if self.ready { "重新连接" } else { "连接" })
                     .on_hover_text("未打开 PDF 也可测试连接；重新连接会停止当前回答。");
                 self.controls.insert("ai-connect", connect.rect);
@@ -496,7 +500,7 @@ impl AiReader {
                 (true, "结合上下文翻译并详解", "ai-explain", "ai-auto-explain"),
             ] {
                 ui.horizontal_wrapped(|ui| {
-                    let button = ui.add_enabled(selection.is_some(), egui::Button::new(label));
+                    let button = ui.add_enabled(selection.is_some(), egui::Button::new(label).wrap());
                     self.controls.insert(button_key, button.rect);
                     if button.clicked() && let Some(selection) = selection { self.request_translation(selection.clone(), detailed); }
                     let mut enabled = self.auto_translation == Some(detailed);

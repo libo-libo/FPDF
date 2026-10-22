@@ -1,7 +1,7 @@
 {
   "name": "fpdf-pi-reader",
   "private": true,
-  "version": "0.8.1",
+  "version": "0.8.2",
   "type": "module",
   "scripts": {
     "build": "esbuild bridge.mjs --bundle --platform=node --target=node24 --format=esm --outfile=../runtime/ai/bridge.mjs",
