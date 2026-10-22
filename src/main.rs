@@ -102,6 +102,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let ai_smoke = args.iter().any(|a| a == "--ai-features");
     let grid_smoke = args.iter().any(|a| a == "--grid-features");
     let search_smoke = args.iter().any(|a| a == "--search-features");
+    let highlight_smoke = args.iter().any(|a| a == "--highlight-features");
     let settings_smoke = args.iter().any(|a| a == "--settings-features");
     if settings_smoke {
         if smoke.is_none() {
@@ -136,18 +137,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if ai_smoke && smoke.is_none() {
         return Err("--ai-features requires --smoke-ui".into());
     }
-    let _outline_fixture = if outline_smoke || reader_smoke || search_smoke || settings_smoke {
-        if smoke.is_none() {
-            return Err("--outline-features requires --smoke-ui".into());
-        }
-        let dir = tempfile::tempdir()?;
-        let copy = dir.path().join("目录编辑测试.pdf");
-        std::fs::copy(input.as_ref().ok_or("missing PDF")?, &copy)?;
-        input = Some(copy);
-        Some(dir)
-    } else {
-        None
-    };
+    let _outline_fixture =
+        if outline_smoke || reader_smoke || search_smoke || settings_smoke || highlight_smoke {
+            if smoke.is_none() {
+                return Err("--outline-features requires --smoke-ui".into());
+            }
+            let dir = tempfile::tempdir()?;
+            let copy = dir.path().join("目录编辑测试.pdf");
+            std::fs::copy(input.as_ref().ok_or("missing PDF")?, &copy)?;
+            input = Some(copy);
+            Some(dir)
+        } else {
+            None
+        };
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("fpdf — PDF 阅读器")
@@ -171,10 +173,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     || ai_smoke
                     || grid_smoke
                     || search_smoke
+                    || highlight_smoke
                     || settings_smoke,
                 outline_smoke,
                 reader_smoke,
-                if settings_smoke {
+                if highlight_smoke {
+                    app::ExtraSmoke::Highlight
+                } else if settings_smoke {
                     app::ExtraSmoke::Settings
                 } else if search_smoke {
                     app::ExtraSmoke::Search

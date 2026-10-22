@@ -31,9 +31,14 @@ pub enum ExtraSmoke {
     Grid,
     Search,
     Settings,
+    Highlight,
 }
 
 pub struct ReaderApp {
+    smoke_highlight: bool,
+    smoke_highlight_before: Option<Arc<PageImage>>,
+    smoke_ink_started: Option<Instant>,
+    smoke_ink_seen: bool,
     smoke_windows: Vec<std::process::Child>,
     uninstall_confirm: bool,
     search: crate::search_ui::SearchUi,
@@ -42,6 +47,13 @@ pub struct ReaderApp {
     highlight_id: u64,
     highlight_pending: Option<u64>,
     highlight_color: [u8; 3],
+    highlight_tool: bool,
+    highlight_preview: Option<(fpdf::pdf::PdfSelection, [u8; 3], u8)>,
+    highlight_stale: HashSet<RenderTarget>,
+    highlight_palette_open: bool,
+    highlight_draft: [u8; 3],
+    highlight_before: [u8; 3],
+    highlight_palette: crate::color_palette::Palette,
     selection: crate::text_selection::TextSelection,
     selection_requests: mpsc::Sender<worker::SelectionRequest>,
     selection_responses: mpsc::Receiver<worker::SelectionResponse>,
@@ -163,6 +175,10 @@ impl ReaderApp {
             crate::theme_settings::ThemeSettings::load()
         };
         let mut app = Self {
+            smoke_highlight: matches!(smoke_extra, ExtraSmoke::Highlight),
+            smoke_highlight_before: None,
+            smoke_ink_started: None,
+            smoke_ink_seen: false,
             smoke_windows: vec![],
             uninstall_confirm: false,
             search: crate::search_ui::SearchUi::new(
@@ -174,6 +190,13 @@ impl ReaderApp {
             highlight_id: 0,
             highlight_pending: None,
             highlight_color: [255, 230, 70],
+            highlight_tool: false,
+            highlight_preview: None,
+            highlight_stale: HashSet::new(),
+            highlight_palette_open: false,
+            highlight_draft: [255, 230, 70],
+            highlight_before: [255, 230, 70],
+            highlight_palette: crate::color_palette::Palette::from_rgb([255, 230, 70]),
             selection: crate::text_selection::TextSelection::default(),
             selection_requests: channels.selection_requests,
             selection_responses: channels.selection_responses,
@@ -375,6 +398,10 @@ impl ReaderApp {
         self.collapsed.clear();
         self.ai.reset();
         self.selection = crate::text_selection::TextSelection::default();
+        self.highlight_tool = false;
+        self.highlight_preview = None;
+        self.highlight_stale.clear();
+        self.highlight_palette_open = false;
         self.selection_id += 1;
         self.selection_committed_id = None;
         self.outline_notice = None;
@@ -447,6 +474,19 @@ impl ReaderApp {
         self.search.open(selected);
         self.text_panel = false;
     }
+    fn toggle_highlight_tool(&mut self) {
+        if self.path.is_none() || self.highlight_pending.is_some() {
+            return;
+        }
+        self.highlight_tool = !self.highlight_tool;
+        if self.highlight_tool && self.selection.current.is_some() {
+            self.highlight_selection(false);
+        } else if self.highlight_tool {
+            self.selection.notice = "高亮工具已开启：拖选文字后松手即可标注，按 Esc 退出。".into();
+        } else {
+            self.selection.notice = "已退出高亮工具。".into();
+        }
+    }
     fn highlight_selection(&mut self, save_as: bool) {
         if self.highlight_pending.is_some() {
             return;
@@ -481,7 +521,7 @@ impl ReaderApp {
                 document_id: self.document_id,
                 path,
                 password: self.password.clone(),
-                selection,
+                selection: selection.clone(),
                 rotation: self.rotation,
                 color: self.highlight_color,
                 output,
@@ -489,6 +529,21 @@ impl ReaderApp {
             .is_ok()
         {
             self.highlight_pending = Some(id);
+            // Show ink in this frame; disk serialization and PDFium reload are
+            // asynchronous and must not gate the visible annotation.
+            self.highlight_preview = Some((selection, self.highlight_color, self.rotation));
+            if self.smoke_highlight {
+                self.smoke_ink_started = Some(Instant::now());
+                self.smoke_ink_seen = false;
+                assert!(
+                    !self.cache.is_empty(),
+                    "Original page must remain visible during save"
+                );
+            }
+            self.selection.current = None;
+            self.selection.pending = None;
+            self.selection_id += 1;
+            self.selection_committed_id = None;
             self.selection.notice = "正在保存高亮标注…".into();
         } else {
             self.selection.notice = "保存线程已退出，请重启程序。".into();
@@ -507,8 +562,9 @@ impl ReaderApp {
                 Ok(()) => {
                     self.path = Some(response.output);
                     self.document_id += 1;
-                    self.info = None;
-                    self.cache.clear();
+                    // Retain the old bitmap beneath the optimistic ink until
+                    // its replacement arrives, avoiding a blank/reload flash.
+                    self.highlight_stale = self.cache.iter().map(|e| e.target).collect();
                     self.errors.clear();
                     self.wanted.clear();
                     self.last_plan.clear();
@@ -524,7 +580,12 @@ impl ReaderApp {
                     ));
                     self.settled_frames = 0;
                 }
-                Err(error) => self.selection.notice = format!("高亮未保存：{}", error.message),
+                Err(error) => {
+                    self.highlight_tool = false;
+                    self.highlight_preview = None;
+                    self.selection.notice = format!("高亮未保存：{}", error.message);
+                    self.outline_notice = Some(self.selection.notice.clone());
+                }
             }
         }
     }
@@ -599,6 +660,18 @@ impl ReaderApp {
             }
             match r.result {
                 Ok(image) => {
+                    self.highlight_stale.remove(&r.target);
+                    if !r.target.thumbnail
+                        && self.highlight_pending.is_none()
+                        && self
+                            .highlight_preview
+                            .as_ref()
+                            .is_some_and(|(s, _, rotation)| {
+                                s.page == r.target.page && *rotation == r.target.rotation
+                            })
+                    {
+                        self.highlight_preview = None;
+                    }
                     self.errors.remove(&r.target);
                     if self
                         .cache
@@ -661,7 +734,9 @@ impl ReaderApp {
             .iter()
             .copied()
             .filter(|t| !self.errors.contains_key(t))
-            .filter(|t| !self.cache.iter().any(|e| e.target == *t))
+            .filter(|t| {
+                self.highlight_stale.contains(t) || !self.cache.iter().any(|e| e.target == *t)
+            })
             .collect::<Vec<_>>();
         if targets.is_empty() {
             return;
@@ -681,6 +756,12 @@ impl ReaderApp {
         }
     }
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        if self.highlight_tool
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.highlight_tool = false;
+            self.selection.notice = "已退出高亮工具。".into();
+        }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::N)) {
             self.new_window(None);
         }
@@ -704,7 +785,7 @@ impl ReaderApp {
             self.open_search();
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F2)) {
-            self.highlight_selection(false);
+            self.toggle_highlight_tool();
         }
         if fit {
             self.zoom = Zoom::FitWidth;
@@ -821,6 +902,59 @@ impl ReaderApp {
             self.rgb_changed = false;
             self.rgb_window = true;
             ui.close();
+        }
+    }
+    fn highlight_color_window(&mut self, ctx: &egui::Context) {
+        if !self.highlight_palette_open {
+            return;
+        }
+        let mut open = true;
+        let mut apply = false;
+        let mut cancel = false;
+        egui::Window::new("高亮颜色 · 调色盘")
+            .id(egui::Id::new("highlight-color-window"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("点选颜色后立即用于后续标注；取消恢复原色。");
+                let (plane, bar, _) = self.highlight_palette.show(ui, &mut self.highlight_draft);
+                self.hit("highlight-palette", plane);
+                self.hit("highlight-brightness", bar);
+                ui.horizontal(|ui| {
+                    for (i, name) in ["R", "G", "B"].into_iter().enumerate() {
+                        ui.label(name);
+                        let value = ui.add(
+                            egui::DragValue::new(&mut self.highlight_draft[i])
+                                .range(0..=255)
+                                .speed(1.0),
+                        );
+                        self.hit(&format!("highlight-{name}"), value);
+                    }
+                });
+                let [r, g, b] = self.highlight_draft;
+                ui.horizontal(|ui| {
+                    let (rect, _) =
+                        ui.allocate_exact_size(Vec2::new(44.0, 24.0), egui::Sense::hover());
+                    ui.painter()
+                        .rect_filled(rect, 3, Color32::from_rgb(r, g, b));
+                    ui.label(format!("RGB({r}, {g}, {b})  #{r:02X}{g:02X}{b:02X}"));
+                });
+                ui.horizontal(|ui| {
+                    apply = self
+                        .hit("highlight-color-apply", ui.button("确定"))
+                        .clicked();
+                    cancel = self
+                        .hit("highlight-color-cancel", ui.button("取消"))
+                        .clicked();
+                });
+            });
+        self.highlight_color = self.highlight_draft;
+        if cancel || !open {
+            self.highlight_color = self.highlight_before;
+            self.highlight_palette_open = false;
+        } else if apply {
+            self.highlight_palette_open = false;
         }
     }
     fn custom_theme_window(&mut self, ctx: &egui::Context) {
@@ -1159,17 +1293,17 @@ impl ReaderApp {
                             }
                             ui.separator();
                             ui.vertical(|ui| {
-                                let can_mark = self.selection.current.is_some()
+                                let can_mark = self.path.is_some()
                                     && self.highlight_pending.is_none();
-                                let mark = ui.add_enabled(can_mark, egui::Button::new("高亮标注"));
+                                let mark = ui.add_enabled(can_mark, egui::Button::new("高亮标注").selected(self.highlight_tool));
                                 if self
                                     .hit("highlight-selection", mark)
-                                    .on_hover_text("选中文字后保存为 PDF 高亮标注 · Ctrl+F2")
+                                    .on_hover_text("开启后拖选文字即可连续高亮；也可先选文字再点击。Ctrl+F2 切换，Esc 退出。")
                                     .clicked()
                                 {
-                                    self.highlight_selection(false);
+                                    self.toggle_highlight_tool();
                                 }
-                                ui.menu_button("标注颜色", |ui| {
+                                let colors = ui.menu_button("标注颜色", |ui| {
                                     for (name, color) in [
                                         ("黄色", [255, 230, 70]),
                                         ("绿色", [120, 230, 140]),
@@ -1185,9 +1319,16 @@ impl ReaderApp {
                                         }
                                     }
                                     ui.separator();
+                                    if self.hit("highlight-custom-color",ui.button("自定义颜色…")).clicked() {
+                                        self.highlight_draft = self.highlight_color;
+                                        self.highlight_before = self.highlight_color;
+                                        self.highlight_palette = crate::color_palette::Palette::from_rgb(self.highlight_draft);
+                                        self.highlight_palette_open = true;
+                                        ui.close();
+                                    }
                                     if ui
                                         .add_enabled(
-                                            can_mark,
+                                            can_mark && self.selection.current.is_some(),
                                             egui::Button::new("添加高亮并另存为…"),
                                         )
                                         .clicked()
@@ -1196,7 +1337,8 @@ impl ReaderApp {
                                         ui.close();
                                     }
                                 });
-                                ui.label(RichText::new("文本标注").small().color(self.muted()));
+                                self.hit("highlight-colors", colors.response);
+                                ui.label(RichText::new(if self.highlight_tool {"高亮中 · Esc 退出"} else {"文本标注"}).small().color(if self.highlight_tool {Color32::from_rgb(205,150,30)} else {self.muted()}));
                             });
                             ui.separator();
                             ui.vertical(|ui| {
@@ -1797,7 +1939,46 @@ impl ReaderApp {
                             egui::StrokeKind::Outside,
                         );
                         self.search.paint(ui, rect, p.page);
-                        let response = self.selection.page(ui, rect, p.page, self.rotation);
+                        if let Some((selection, [r, g, b], rotation)) = &self.highlight_preview
+                            && selection.page == p.page
+                            && *rotation == self.rotation
+                        {
+                            if let Some(started) = self.smoke_ink_started.take() {
+                                let latency = started.elapsed();
+                                assert!(
+                                    latency < Duration::from_millis(250),
+                                    "Visible ink was delayed: {latency:?}"
+                                );
+                                self.smoke_ink_seen = true;
+                                println!(
+                                    "Highlighter ink painted before disk completion: {latency:?}"
+                                );
+                            }
+                            for &[left, top, right, bottom] in &selection.rects {
+                                ui.painter().rect_filled(
+                                    Rect::from_min_max(
+                                        rect.min
+                                            + Vec2::new(left * rect.width(), top * rect.height()),
+                                        rect.min
+                                            + Vec2::new(
+                                                right * rect.width(),
+                                                bottom * rect.height(),
+                                            ),
+                                    ),
+                                    0.0,
+                                    Color32::from_rgba_unmultiplied(*r, *g, *b, 90),
+                                );
+                            }
+                        }
+                        let response = if self.highlight_pending.is_some() {
+                            ui.interact(
+                                rect,
+                                ui.id().with(("saving-highlight", p.page)),
+                                egui::Sense::hover(),
+                            )
+                        } else {
+                            self.selection.page(ui, rect, p.page, self.rotation)
+                        };
                         self.hit(&format!("selection-page-{}", p.page), response.clone());
                         if self.layout.columns > 1 {
                             self.hit(&format!("grid-page-{}", p.page), response.clone());
@@ -2255,6 +2436,11 @@ impl ReaderApp {
             && self.error.is_none()
             && self.smoke_double_click.is_none()
             && self.smoke_drag.is_none()
+            && self.highlight_pending.is_none()
+            && self
+                .highlight_stale
+                .iter()
+                .all(|t| !self.wanted.contains(t))
             && self
                 .inline_rename
                 .as_ref()
@@ -2271,7 +2457,248 @@ impl ReaderApp {
             self.settled_frames = 0;
         }
         if self.settled_frames > 8 {
-            if self.smoke_settings && self.smoke_step < 12 {
+            if self.smoke_highlight && self.smoke_step < 27 {
+                match self.smoke_step {
+                    0 => {
+                        self.goto(2);
+                        self.zoom = Zoom::FitPage;
+                    }
+                    1 => {
+                        let rect = self.smoke_hits["selection-page-2"];
+                        let point = rect.min
+                            + Vec2::new(150.0 / 612.0 * rect.width(), 72.0 / 792.0 * rect.height());
+                        self.smoke_double_click = Some((point, 42));
+                    }
+                    2 => {
+                        if self
+                            .selection
+                            .current
+                            .as_ref()
+                            .is_none_or(|s| s.text != "page")
+                        {
+                            ctx.request_repaint_after(Duration::from_millis(100));
+                            return;
+                        }
+                        self.smoke_highlight_before = Some(
+                            self.cache
+                                .iter()
+                                .find(|e| e.target.page == 2 && !e.target.thumbnail)
+                                .unwrap()
+                                .image
+                                .clone(),
+                        );
+                        self.smoke_document_id = self.document_id;
+                        self.click_test_control("highlight-selection");
+                    }
+                    3 => {
+                        assert!(
+                            self.smoke_ink_seen,
+                            "Selected-text highlight must paint immediately"
+                        );
+                        if self.highlight_pending.is_some() {
+                            ctx.request_repaint_after(Duration::from_millis(100));
+                            return;
+                        }
+                        assert_eq!(
+                            self.document_id,
+                            self.smoke_document_id + 1,
+                            "{}",
+                            self.selection.notice
+                        );
+                        let image = &self
+                            .cache
+                            .iter()
+                            .find(|e| e.target.page == 2 && !e.target.thumbnail)
+                            .unwrap()
+                            .image;
+                        let before = self.smoke_highlight_before.as_ref().unwrap();
+                        assert_eq!(before.width, image.width);
+                        assert_ne!(
+                            before.rgba, image.rgba,
+                            "Saved annotation must change the displayed page bitmap"
+                        );
+                        save_png(&path.with_file_name("highlight-before.png"), before).unwrap();
+                        save_png(&path.with_file_name("highlight-after.png"), image).unwrap();
+                        println!(
+                            "Selected-text highlight changed actual page pixels after save/cache reload"
+                        );
+                    }
+                    4 => {
+                        assert!(self.highlight_tool);
+                        self.smoke_document_id = self.document_id;
+                        let rect = self.smoke_hits["selection-page-2"];
+                        let start = rect.min
+                            + Vec2::new(50.0 / 612.0 * rect.width(), 72.0 / 792.0 * rect.height());
+                        let end = rect.min
+                            + Vec2::new(
+                                300.0 / 612.0 * rect.width(),
+                                127.0 / 792.0 * rect.height(),
+                            );
+                        self.smoke_drag = Some((start, end, 0));
+                    }
+                    5 => {
+                        if self.highlight_pending.is_some()
+                            || self.document_id == self.smoke_document_id
+                        {
+                            ctx.request_repaint_after(Duration::from_millis(100));
+                            return;
+                        }
+                        assert!(self.highlight_tool);
+                        let saved = lopdf::Document::load(self.path.as_ref().unwrap()).unwrap();
+                        let page = saved.get_dictionary(saved.get_pages()[&3]).unwrap();
+                        let annotations = page.get(b"Annots").unwrap().as_array().unwrap();
+                        assert_eq!(
+                            annotations.len(),
+                            2,
+                            "Both selected-text and tool-first highlights must persist"
+                        );
+                        let last = saved
+                            .get_dictionary(annotations[1].as_reference().unwrap())
+                            .unwrap();
+                        assert!(
+                            last.get(b"QuadPoints").unwrap().as_array().unwrap().len() >= 16,
+                            "Multiline drag must annotate multiple lines"
+                        );
+                        std::fs::copy(
+                            self.path.as_ref().unwrap(),
+                            path.with_file_name("highlight-saved.pdf"),
+                        )
+                        .unwrap();
+                        self.smoke_events = vec![egui::Event::Key {
+                            key: egui::Key::Escape,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        }];
+                    }
+                    6 => {
+                        assert!(!self.highlight_tool, "Escape must leave highlighter mode");
+                        self.click_test_control("highlight-selection");
+                    }
+                    7 => {
+                        assert!(
+                            self.highlight_tool,
+                            "Tool must activate before selecting any text"
+                        );
+                        self.click_test_control("highlight-selection");
+                    }
+                    8 => {
+                        assert!(!self.highlight_tool);
+                        let saved = self.path.clone().unwrap();
+                        self.open(saved);
+                        self.goto(2);
+                    }
+                    9 => {
+                        self.goto(2);
+                        self.theme = PaperTheme::Night;
+                    }
+                    10 => {
+                        self.theme = PaperTheme::Green;
+                    }
+                    11 => {
+                        self.theme = PaperTheme::Warm;
+                    }
+                    12 => {
+                        self.theme = PaperTheme::Night;
+                        println!(
+                            "Highlighter UI verified: select-first, tool-first multiline drag, persistent tool, Escape, button exit, two saved annotations and reopen; night hue/contrast covered by pixel regression"
+                        );
+                    }
+                    13 => self.click_test_control("highlight-colors"),
+                    14 => self.click_test_control("highlight-custom-color"),
+                    15 => {
+                        let rect = self.smoke_hits["highlight-palette"];
+                        self.smoke_click =
+                            Some(rect.min + Vec2::new(rect.width() / 3.0, rect.height() * 0.06));
+                    }
+                    16 => {
+                        assert!(self.highlight_color[1] > self.highlight_color[0] + 100);
+                        assert!(self.highlight_color[1] > self.highlight_color[2] + 100);
+                        self.click_test_control("highlight-color-apply");
+                    }
+                    17 => {
+                        assert!(!self.highlight_palette_open);
+                        self.smoke_document_id = self.document_id;
+                        self.click_test_control("highlight-selection");
+                    }
+                    18 => {
+                        assert!(self.highlight_tool);
+                        let rect = self.smoke_hits["selection-page-2"];
+                        let point = rect.min
+                            + Vec2::new(75.0 / 612.0 * rect.width(), 162.0 / 792.0 * rect.height());
+                        self.smoke_double_click = Some((point, 42));
+                    }
+                    19 => {
+                        if self.document_id == self.smoke_document_id
+                            || self.highlight_pending.is_some()
+                        {
+                            ctx.request_repaint_after(Duration::from_millis(100));
+                            return;
+                        }
+                        let saved = lopdf::Document::load(self.path.as_ref().unwrap()).unwrap();
+                        let annots = saved
+                            .get_dictionary(saved.get_pages()[&3])
+                            .unwrap()
+                            .get(b"Annots")
+                            .unwrap()
+                            .as_array()
+                            .unwrap();
+                        assert_eq!(annots.len(), 3);
+                        let color = saved
+                            .get_dictionary(annots[2].as_reference().unwrap())
+                            .unwrap()
+                            .get(b"C")
+                            .unwrap()
+                            .as_array()
+                            .unwrap();
+                        for (channel, expected) in color.iter().zip(self.highlight_color) {
+                            assert!(
+                                (f64::from(channel.as_float().unwrap())
+                                    - f64::from(expected) / 255.0)
+                                    .abs()
+                                    < 0.001
+                            );
+                        }
+                        std::fs::copy(
+                            self.path.as_ref().unwrap(),
+                            path.with_file_name("highlight-saved.pdf"),
+                        )
+                        .unwrap();
+                        self.click_test_control("highlight-colors");
+                    }
+                    20 => self.click_test_control("highlight-custom-color"),
+                    21 => {
+                        assert!(self.highlight_palette_open);
+                        let rect = self.smoke_hits["highlight-palette"];
+                        self.smoke_click =
+                            Some(rect.min + Vec2::new(rect.width() * 0.01, rect.height() * 0.05));
+                    }
+                    22 => {
+                        assert_ne!(self.highlight_color, self.highlight_before);
+                        self.click_test_control("highlight-color-cancel");
+                    }
+                    23 => {
+                        assert!(!self.highlight_palette_open);
+                        assert_eq!(self.highlight_color, self.highlight_before);
+                        println!(
+                            "Color palette actual click/apply/cancel and custom RGB annotation persistence verified"
+                        );
+                        self.click_test_control("highlight-colors");
+                    }
+                    24 => self.click_test_control("highlight-custom-color"),
+                    25 => {
+                        assert!(self.highlight_palette_open);
+                    }
+                    26 => {
+                        assert!(self.smoke_hits.contains_key("highlight-R"));
+                    }
+                    _ => {}
+                }
+                self.smoke_step += 1;
+                self.settled_frames = 0;
+                ctx.request_repaint();
+            } else if self.smoke_settings && self.smoke_step < 12 {
                 match self.smoke_step {
                     0 => self.click_test_control("ask-selection"),
                     1 => {
@@ -2835,6 +3262,7 @@ impl ReaderApp {
                 && !self.smoke_grid
                 && !self.smoke_search
                 && !self.smoke_settings
+                && !self.smoke_highlight
                 && self.smoke_step < 30
             {
                 match self.smoke_step {
@@ -3071,6 +3499,7 @@ impl ReaderApp {
                     && !self.smoke_grid
                     && !self.smoke_search
                     && !self.smoke_settings
+                    && !self.smoke_highlight
                 {
                     assert_eq!(self.theme, PaperTheme::Green);
                     assert!(self.layout.pages.len() >= 3);
@@ -3179,6 +3608,16 @@ impl eframe::App for ReaderApp {
         }
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.highlight_palette_open
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.highlight_palette_open = false;
+            self.highlight_color = self.highlight_before;
+        }
+        if self.highlight_pending.is_some() && ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.selection.notice = "正在保存高亮，请稍候再关闭窗口。".into();
+        }
         if self.uninstall_confirm
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
@@ -3208,12 +3647,14 @@ impl eframe::App for ReaderApp {
             self.rotation,
             self.pages(),
         );
+        let mut mark_committed = false;
         for response in self.selection_responses.try_iter() {
             if response.document_id == self.document_id && response.id == self.selection_id {
                 match response.result {
                     Ok(selection) => {
                         if self.selection_committed_id.take() == Some(response.id) {
                             self.ai.selection_committed(&selection);
+                            mark_committed = self.highlight_tool;
                         }
                         self.selection.notice = format!(
                             "已选择 {} 字 · 第 {} 页{}",
@@ -3230,6 +3671,9 @@ impl eframe::App for ReaderApp {
                     Err(error) => self.selection.notice = error.message,
                 }
             }
+        }
+        if mark_committed {
+            self.highlight_selection(false);
         }
         for response in self.text_responses.try_iter() {
             if response.document_id == self.document_id {
@@ -3430,6 +3874,7 @@ impl eframe::App for ReaderApp {
             );
         }
         self.text(ctx);
+        self.selection.highlight_color = self.highlight_tool.then_some(self.highlight_color);
         self.content(ctx);
         if self.selection.invalidate {
             self.selection_id += 1;
@@ -3502,6 +3947,7 @@ impl eframe::App for ReaderApp {
             }
         }
         self.custom_theme_window(ctx);
+        self.highlight_color_window(ctx);
         if self.uninstall_confirm {
             let mut controls = HashMap::new();
             match crate::window_actions::confirm_uninstall(ctx, &mut controls) {

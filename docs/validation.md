@@ -1,5 +1,15 @@
 # Validation
 
+## v0.8.3 highlight interaction repair — 2026-10-22
+
+- Format/Clippy passed; 31 Rust tests and 3 AI bridge tests passed. Actual saved annotation pixels have visible contrast inside the selected text region in white, night, green, warm and dark custom RGB themes.
+- Native GUI automation exercises select-first and tool-first highlighter input, multiline drag, continued tool state, Escape/button exit, save/reopen, palette clicks, RGB annotation values and cancelling a changed color. The screenshot `fpdf-highlight-preview.png` shows the actual night interface and palette.
+- Queued highlight ink is painted in the same frame before persistence finishes; original page textures remain visible until replacement images arrive. This measures UI paint submission, not monitor presentation or disk completion time.
+- Search/AI coexistence, independent closes, compact layout, multiple PDF windows, uninstall cancellation, theme RGB controls, scrollbar drag and continuous reading regressions passed.
+- WPS comparison reuses command/color/quad evidence and a new REA PE inventory. Exact WPS visual timing/blending is unobserved; the immediate preview and texture replacement are independent implementations.
+- Six-page manual updated and visually reviewed. The release packaging retains the author API/key/token exclusion checks.
+- Isolated installed v0.8.3 passed the full highlighter/palette GUI workflow, all 110 installed file hashes matched distribution, uninstall preserved a user PDF and removed owned settings/logs. The source, installer, manual and ZIP passed private endpoint/key/token scanning.
+
 ## v0.8.2 unified release — 2026-10-22
 
 - Rust formatting and all-target Clippy passed. The suite contains 30 Rust tests, including actual modal button clicks for cancel and confirm.

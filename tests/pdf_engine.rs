@@ -319,6 +319,37 @@ fn search_and_highlight_round_trip(pdf: &mut PdfEngine) {
         "saved highlight must visibly render after reopen"
     );
     assert_eq!(before.text, after.text);
+    // A changed PDF is insufficient: the selected region must remain visibly
+    // highlighted after the same color transform used by the desktop texture.
+    for theme in [
+        fpdf::reading::PaperTheme::White,
+        fpdf::reading::PaperTheme::Night,
+        fpdf::reading::PaperTheme::Green,
+        fpdf::reading::PaperTheme::Warm,
+        fpdf::reading::PaperTheme::Custom([15, 20, 25]),
+    ] {
+        let old = theme.rgba(&before.rgba);
+        let new = theme.rgba(&after.rgba);
+        let mut visible = 0;
+        for &[left, top, right, bottom] in &select.rects {
+            for y in (top * after.height as f32) as usize
+                ..((bottom * after.height as f32) as usize).min(after.height as usize)
+            {
+                for x in (left * after.width as f32) as usize
+                    ..((right * after.width as f32) as usize).min(after.width as usize)
+                {
+                    let offset = (y * after.width as usize + x) * 4;
+                    if (0..3).any(|c| old[offset + c].abs_diff(new[offset + c]) > 30) {
+                        visible += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            visible > 20,
+            "Actual saved highlight must contrast inside selection on {theme:?}"
+        );
+    }
     // A relative output resolving to the source itself must atomically replace
     // that PDF without losing its original annotation or earlier highlights.
     let relative_dir = tempfile::tempdir_in(".").unwrap();
@@ -613,11 +644,13 @@ fn real_pdf_loading_rendering_and_worker_lifecycle() {
     let worker_pause = pause_next.clone();
     let (paused_tx, paused_rx) = std::sync::mpsc::channel();
     let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    let (wake_done_tx, wake_done_rx) = std::sync::mpsc::channel();
     let channels = worker::spawn_reader(move || {
         if worker_pause.swap(false, std::sync::atomic::Ordering::SeqCst) {
             paused_tx.send(()).unwrap();
             resume_rx.recv_timeout(Duration::from_secs(10)).unwrap();
         }
+        let _ = wake_done_tx.send(());
     });
     let (tx, rx) = (channels.requests, channels.responses);
     let targets = (0..3)
@@ -719,6 +752,12 @@ fn real_pdf_loading_rendering_and_worker_lifecycle() {
         }
     }
     assert!(search_pages.contains(&0) && search_pages.contains(&2));
+    // Response delivery precedes wake(). Wait for earlier callbacks to finish
+    // before arming the pause, so query 20's final wake cannot steal query 21's
+    // barrier and deadlock this cancellation test.
+    for _ in 0..targets.len() + 2 + 3 {
+        wake_done_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    }
     // Stop the owner after exactly one searched page, then enqueue cancellation
     // and a replacement query. No remaining old-query pages may leak afterward.
     pause_next.store(true, std::sync::atomic::Ordering::SeqCst);

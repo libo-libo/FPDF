@@ -25,6 +25,7 @@ pub struct TextSelection {
     pub invalidate: bool,
     pub action: Option<TranslationAction>,
     pub auto_translation: Option<bool>,
+    pub highlight_color: Option<[u8; 3]>,
     start: Option<(u32, [f64; 2])>,
     rotation: u8,
     last_sample: Option<(Instant, [f64; 2])>,
@@ -56,7 +57,11 @@ impl TextSelection {
             egui::Sense::click_and_drag(),
         );
         if response.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+            ui.ctx().set_cursor_icon(if self.highlight_color.is_some() {
+                egui::CursorIcon::Crosshair
+            } else {
+                egui::CursorIcon::Text
+            });
         }
         let normalize = |point: egui::Pos2| {
             [
@@ -127,7 +132,10 @@ impl TextSelection {
                 ui.painter().rect_filled(
                     highlight,
                     0.0,
-                    Color32::from_rgba_unmultiplied(65, 135, 245, 75),
+                    self.highlight_color.map_or(
+                        Color32::from_rgba_unmultiplied(65, 135, 245, 75),
+                        |[r, g, b]| Color32::from_rgba_unmultiplied(r, g, b, 110),
+                    ),
                 );
             }
             response.context_menu(|ui| {

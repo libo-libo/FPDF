@@ -41,6 +41,21 @@ impl PaperTheme {
             ),
         };
         let mut out = pixel;
+        // Preserve colored content on dark paper; per-channel inversion turns
+        // pale yellow highlighter ink blue and almost indistinguishable from paper.
+        if self.is_dark() {
+            let high = u32::from(*pixel[..3].iter().max().unwrap());
+            let low = u32::from(*pixel[..3].iter().min().unwrap());
+            let chroma = high - low;
+            if chroma >= 24 {
+                let strength = (chroma * 255).isqrt();
+                for c in 0..3 {
+                    let hue = (u32::from(pixel[c]) - low) * 255 / chroma;
+                    out[c] = ((paper[c] * (255 - strength) + hue * strength) / 255) as u8;
+                }
+                return out;
+            }
+        }
         for c in 0..3 {
             out[c] = ((ink[c] * (255 - pixel[c] as u32) + paper[c] * pixel[c] as u32) / 255) as u8;
         }
@@ -352,5 +367,25 @@ mod tests {
             [220, 224, 230, 123]
         );
         assert_eq!(PaperTheme::Green.pixel([0, 0, 0, 255]), [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn dark_paper_preserves_highlight_hues_and_visible_contrast() {
+        for theme in [PaperTheme::Night, PaperTheme::Custom([20, 24, 28])] {
+            let paper = theme.pixel([255, 255, 255, 255]);
+            for (input, channel) in [
+                ([255, 246, 190, 123], 0),
+                ([208, 246, 215, 123], 1),
+                ([201, 232, 255, 123], 2),
+                ([255, 218, 236, 123], 0),
+            ] {
+                let marked = theme.pixel(input);
+                assert_eq!(marked[3], 123);
+                assert!(marked[channel] > paper[channel] + 45);
+                if channel == 0 {
+                    assert!(marked[0] > marked[2] + 30);
+                }
+            }
+        }
     }
 }

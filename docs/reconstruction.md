@@ -25,4 +25,8 @@ Search uses PDFium's native text-find APIs on the same owning thread, yielding b
 
 ## Distribution
 
+Highlighter input has two entry paths: apply to an existing selection or keep the tool active for subsequent committed selections. The UI paints temporary ink immediately and retains its current bitmap while atomic persistence and PDFium reload run on the owner thread. Fresh page images replace the ink; failed writes remove it. Dark themes preserve colored content rather than independently inverting RGB channels. The existing RGB palette also supplies annotation colors.
+
+WPS alignment uses shipped highlight commands, Ctrl+F2, color/more-colors resources and quad interfaces documented in local REA research. Static evidence does not establish exact WPS timing, color blending or the complete native save implementation; fpdf's preview/cache strategy is independent.
+
 Application code is MIT licensed. Releases include independent PDFium, Node.js, pi and dependency notices. Proprietary programs, extracted assets, analysis tools, real AI configuration and tokens are excluded.
