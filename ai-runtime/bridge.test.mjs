@@ -16,6 +16,35 @@ test('configuration rejects credentials in URL and accepts BOM/CRLF', () => {
   assert.throws(() => parseConfig('http://localhost/v1'));
 });
 
+test('connection can initialize models before any PDF is opened', { timeout: 20000 }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'fpdf-empty-document-'));
+  let requests = 0;
+  const server = createServer((req, res) => {
+    assert.equal(req.headers.authorization, 'Bearer empty-document-test');
+    assert.equal(req.url, '/v1/models');
+    requests++;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ data: [{ id: 'GLM-5.3-Flash' }] }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const config = join(dir, 'agent.txt');
+  await writeFile(config, `http://127.0.0.1:${server.address().port}/v1\nempty-document-test\n`);
+  const child = spawn(process.execPath, [resolve('../runtime/ai/bridge.mjs')], { env: { ...process.env, FPDF_BRIDGE_TEST_IMPORT: '' }, stdio: ['pipe', 'pipe', 'pipe'] });
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Empty-document connection timed out')), 15000);
+      child.once('exit', code => { clearTimeout(timer); reject(new Error(`bridge exited ${code}`)); });
+      createInterface({ input: child.stdout }).on('line', line => {
+        const event = JSON.parse(line);
+        if (event.type === 'error') { clearTimeout(timer); reject(new Error(event.text)); }
+        if (event.type === 'ready') { clearTimeout(timer); assert.equal(event.model, 'GLM-5.3-Flash'); resolve(); }
+      });
+      child.stdin.write(JSON.stringify({ type: 'init', config_path: config, document: { title: '', page_count: 0, outline: [] } }) + '\n');
+    });
+    assert.equal(requests, 1);
+  } finally { child.kill(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('bundled pi agent requests PDF text, streams answer and uses authenticated API', { timeout: 30000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'fpdf-pi-'));
   let requests = 0;

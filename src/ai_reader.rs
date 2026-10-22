@@ -397,6 +397,7 @@ impl AiReader {
             self.controls.remove(key);
         }
         let mut jump = None;
+        let empty_document = DocumentInfo::default();
         if self.has_pending_prompt()
             && !self.ready
             && self.child.is_none()
@@ -411,11 +412,10 @@ impl AiReader {
                 if ui.small_button("关闭").clicked() { self.visible = false; }
             });
             ui.horizontal(|ui| {
-                let connect = ui.add_enabled(!self.busy && info.is_some(), egui::Button::new(if self.ready { "重新连接" } else { "连接" }));
+                let connect = ui.button(if self.ready { "重新连接" } else { "连接" })
+                    .on_hover_text("未打开 PDF 也可测试连接；重新连接会停止当前回答。");
                 self.controls.insert("ai-connect", connect.rect);
-                if connect.clicked()
-                    && let Some(info) = info
-                { self.connect(ctx, info, title); }
+                if connect.clicked() { self.connect(ctx, info.map_or(&empty_document, |value| value.as_ref()), title); }
                 let config_button = ui.button("API 配置");
                 self.controls.insert("ai-config", config_button.rect);
                 if config_button.clicked() { self.config_editor_open = !self.config_editor_open; }
@@ -443,13 +443,13 @@ impl AiReader {
                     let key = ui.add(egui::TextEdit::singleline(&mut self.config_key).password(true).desired_width(f32::INFINITY).hint_text("填写服务商提供的密钥"));
                     self.controls.insert("ai-config-key", key.rect);
                     ui.label(egui::RichText::new("默认模型 GLM-5.3-Flash；连接后可切换可用模型。配置保存在当前用户的 AppData 中。密钥以本地文本保存，请勿分享配置文件。").small().weak());
-                    let save = ui.button(if info.is_some() { "保存并连接" } else { "保存配置" });
+                    let save = ui.button("保存并连接");
                     self.controls.insert("ai-config-save", save.rect);
                     if save.clicked() {
                         match self.save_config_editor() {
                             Ok(()) => {
                                 self.config_editor_open = false;
-                                if let Some(info) = info { self.connect(ctx, info, title); }
+                                self.connect(ctx, info.map_or(&empty_document, |value| value.as_ref()), title);
                             }
                             Err(error) => { self.status = error; }
                         }
@@ -462,7 +462,7 @@ impl AiReader {
                     for model in &self.models { ui.selectable_value(&mut self.model, model.clone(), model); }
                 });
             });
-            if previous != self.model && let Some(info) = info { self.connect(ctx, info, title); }
+            if previous != self.model { self.connect(ctx, info.map_or(&empty_document, |value| value.as_ref()), title); }
             ui.label(egui::RichText::new(&self.status).small());
             ui.label(egui::RichText::new("翻译或提问时，相关文本会发送至配置的 API。").small().weak());
             ui.separator();
@@ -1060,6 +1060,57 @@ mod tests {
         assert!(brief.contains("不展开长篇解释"));
         assert!(detailed.contains("指代关系、难句结构"));
     }
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn connect_button_is_usable_without_pdf_and_while_busy() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut ai = super::AiReader::default();
+        ai.visible = true;
+        ai.busy = true;
+        ai.config_initialized = true;
+        ai.config = Some(directory.path().join("missing-config.txt"));
+        let ctx = eframe::egui::Context::default();
+        let input = |events| eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                eframe::egui::Pos2::ZERO,
+                eframe::egui::vec2(1200.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            let _ = ctx.run(input(vec![]), |ctx| {
+                ai.show(ctx, None, "", 0, None);
+            });
+        }
+        let position = ai.controls["ai-connect"].center();
+        for pressed in [true, false] {
+            let _ = ctx.run(
+                input(vec![
+                    eframe::egui::Event::PointerMoved(position),
+                    eframe::egui::Event::PointerButton {
+                        pos: position,
+                        button: eframe::egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: eframe::egui::Modifiers::NONE,
+                    },
+                ]),
+                |ctx| {
+                    ai.show(ctx, None, "", 0, None);
+                },
+            );
+        }
+        assert!(
+            !ai.busy,
+            "Clicking connect must stop a previous request even without a PDF"
+        );
+        assert!(
+            ai.status.contains("无法读取 AI 配置"),
+            "The click must attempt the selected configuration: {}",
+            ai.status
+        );
+    }
+
     #[test]
     fn citations_are_bounded_and_deduplicated() {
         assert_eq!(
