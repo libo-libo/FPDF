@@ -2,21 +2,21 @@
 
 Windows x64 PDF 阅读器，使用 Rust 编写。支持连续阅读、目录编辑、夜间与护眼模式，以及基于 pi agent 的 AI 辅助阅读。PDF 解析使用独立 PDFium，无需安装 WPS。
 
-[下载最新版](https://github.com/libo-libo/FPDF/releases/latest) · [中文 PDF 使用说明](https://github.com/libo-libo/FPDF/releases/download/v0.8.5/fpdf-0.8.5-user-guide-zh-CN.pdf) · [更新记录](CHANGELOG.md)
+[下载最新版](https://github.com/libo-libo/FPDF/releases/latest) · [中文 PDF 使用说明](https://github.com/libo-libo/FPDF/releases/download/v0.8.6/fpdf-0.8.6-user-guide-zh-CN.pdf) · [更新记录](CHANGELOG.md)
 
 ![夜间模式与目录页码](docs/fpdf-outline-pages-preview.png)
 
 ## 从 GitHub 下载和安装
 
 1. 打开 [FPDF 仓库](https://github.com/libo-libo/FPDF)，点击右侧 **Releases**；也可以直接打开[版本下载页](https://github.com/libo-libo/FPDF/releases/latest)。
-2. 进入最新版本（当前 **v0.8.5**），展开下方 **Assets**。点击文件名下载，无需 Git 或 GitHub 账号。
+2. 进入最新版本（当前 **v0.8.6**），展开下方 **Assets**。点击文件名下载，无需 Git 或 GitHub 账号。
 3. 选择下面的安装程序或免安装包。`Source code (zip)` / `Source code (tar.gz)` 是开发用源码，不能直接作为阅读器运行。
 
 | 文件 | 使用方法 |
 | --- | --- |
-| `fpdf-0.8.5-windows-x64-setup.exe` | 双击，按向导安装到当前用户目录，创建开始菜单快捷方式；可在 Windows 设置中卸载。 |
-| `fpdf-0.8.5-windows-x64.zip` | 右键 → 全部解压，再打开解压目录中的 `fpdf.exe`。 |
-| `fpdf-0.8.5-user-guide-zh-CN.pdf` | 中文使用说明，包含下载、阅读、目录编辑和 AI 翻译。 |
+| `fpdf-0.8.6-windows-x64-setup.exe` | 双击，按向导安装到当前用户目录，创建开始菜单快捷方式；可在 Windows 设置中卸载。 |
+| `fpdf-0.8.6-windows-x64.zip` | 右键 → 全部解压，再打开解压目录中的 `fpdf.exe`。 |
+| `fpdf-0.8.6-user-guide-zh-CN.pdf` | 中文使用说明，包含下载、阅读、目录编辑和 AI 翻译。 |
 | `SHA256SUMS.txt` | 下载校验值，使用以下命令核对。 |
 
 要求 Windows 10/11 x64。发行包自带 PDFium 与 AI 所需的 Node.js，无需安装 Rust、Node.js 或开发工具。**保留整个程序目录**，包括 `pdfium.dll`、`ai/` 和许可证，不能只复制 `fpdf.exe`。当前安装程序未做代码签名。
@@ -24,12 +24,12 @@ Windows x64 PDF 阅读器，使用 Rust 编写。支持连续阅读、目录编�
 在 PowerShell 中计算文件 SHA-256，与同版本的 `SHA256SUMS.txt` 对照：
 
 ```powershell
-Get-FileHash .\fpdf-0.8.5-windows-x64-setup.exe -Algorithm SHA256
+Get-FileHash .\fpdf-0.8.6-windows-x64-setup.exe -Algorithm SHA256
 ```
 
 升级前关闭旧版，再运行新安装程序；免安装版建议解压到新目录。自行创建的 AI 配置建议放在 `%APPDATA%/fpdf/agent.txt`，便于升级保留。
 
-0.8.5 修正版补充了 Windows P 图标、应用内 API 配置和一键卸载入口。安装版可从“文件 → 卸载 fpdf（清除全部配置）”或开始菜单同名入口确认后移除程序及其保存的 AI 配置、主题、缓存和日志；保留用户 PDF。Windows 设置的“已安装的应用”也支持卸载。
+0.8.6 新增顶部栏整体折叠与界面字号调节：关闭“顶部栏”后标题栏和工具栏一起收起，左侧导航窗格与顶部导航条仍保留恢复入口；顶部导航条中的“界面字号”滑块统一调整各界面文字大小（75%–175%），不改变 PDF 页面缩放。顶部工具栏下边缘可拖动调整高度，标签栏的新建与关闭按钮尺寸和垂直对齐已修正。安装版可一键卸载并清理 AI 配置、主题、缓存和日志，保留用户 PDF。
 
 ## 基本阅读
 

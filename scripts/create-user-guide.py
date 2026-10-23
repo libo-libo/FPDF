@@ -9,7 +9,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, Flowable
+from reportlab.pdfgen import canvas as pdfcanvas
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = re.search(r'^version = "([^"]+)"', (ROOT / 'Cargo.toml').read_text('utf-8'), re.M)[1]
@@ -35,7 +36,7 @@ styles = {
     'caption': ParagraphStyle('caption', fontName='Guide', fontSize=8.5, leading=12, textColor=MUTED, alignment=TA_CENTER, spaceBefore=5, spaceAfter=10),
 }
 story = []
-HEADINGS = ['开始使用', '安装与阅读', '文档目录与阅读外观', 'AI 配置与文档问答', '选区翻译：单次与长开', '快捷键与常见问题']
+MARKS = []
 
 def p(text, style='body'):
     return Paragraph(text, styles[style])
@@ -43,9 +44,21 @@ def p(text, style='body'):
 def add(text, style='body'):
     story.append(p(text, style))
 
+class SectionMark(Flowable):
+    def __init__(self, title):
+        super().__init__()
+        self.title = title
+
+    def wrap(self, available_width, available_height):
+        return (0, 0)
+
+    def draw(self):
+        MARKS.append((self.title, self.canv.getPageNumber()))
+
 def section(number, title):
     if number > 1:
         story.append(PageBreak())
+    story.append(SectionMark(title))
     add(f'{number:02d}  {title}', 'h1')
 
 def table(rows, widths=None):
@@ -68,7 +81,7 @@ def screenshot(name, width=WIDTH):
 section(1, '开始使用')
 add('fpdf', 'cover')
 add('PDF 阅读器 · 中文使用说明', 'subtitle')
-add(f'版本 {VERSION}  |  Windows x64  |  2026-10-22', 'small')
+add(f'版本 {VERSION}  |  Windows x64  |  2026-10-23', 'small')
 add('连续阅读、目录编辑、选词翻译。界面采用简洁的工具栏与左右侧栏布局。普通阅读无需联网，AI 功能由使用者自行配置。')
 screenshot('fpdf-underline-preview.png', 450)
 add('夜间模式实际界面：下划线写入 PDF，颜色调色盘支持点选、亮度和 RGB 数值。', 'caption')
@@ -109,6 +122,9 @@ add('左侧切换到“文档目录”。目录来自 PDF 自带书签；名称�
 add('点击左侧三角形可折叠或展开子目录，也可选择“展开全部 / 折叠全部”。点击名称或页码即可跳转。长标题会换行，悬停可查看完整名称；星号与显示页码不属于书签名称。')
 add('标签页与独立窗口', 'h2')
 add('顶部 ＋ / Ctrl+T 新建标签；打开文件可多选，拖入 PDF 也会添加标签。点击切换，× / Ctrl+W 关闭，Ctrl+Tab / Ctrl+Shift+Tab 切换前后标签；各自保留页码、缩放、搜索、AI 和高亮撤销。Ctrl+N 新建独立窗口；“在新窗口打开 PDF…”保留。保存期间可切换，关闭前等待保存完成。')
+add('顶部栏与界面字号', 'h2')
+add('左侧导航窗格的“顶部栏”开关会同时收起标题栏和工具栏；关闭左侧窗格后，仍可从顶部导航条重新打开。顶部工具栏下边缘可拖动调整高度。')
+add('顶部导航条的“界面字号”滑块统一调整标题栏、工具栏、导航、搜索、AI 和文本栏的文字大小，范围 75%–175%，不改变 PDF 页面缩放。', 'small')
 add('双击名称，直接修改', 'h2')
 add('双击目录名称，在原位置输入新名称。按 Enter 或点击其他位置保存到原 PDF；按 Esc 取消。保存名称不会重新加载页面或打断阅读位置。保存失败会保留输入并显示原因。')
 add('需要改动层级或页码时，点击“编辑目录”。可新增章节 / 子章节、设置跳转页码、升降级、上下移动、删除及撤销。选择“保存到原 PDF”或“另存为…”，重新打开仍然生效。')
@@ -196,13 +212,38 @@ def page_frame(canvas, doc):
     canvas.setStrokeColor(colors.HexColor('#E1E5EA'))
     canvas.line(50, 39, A4[0]-50, 39)
     canvas.drawString(50, 24, 'libo-libo/FPDF  ·  Windows x64')
-    canvas.drawRightString(A4[0]-50, 24, f'{doc.page} / 6')
-    if doc.page <= len(HEADINGS):
-        canvas.bookmarkPage(f'section-{doc.page}')
-        canvas.addOutlineEntry(HEADINGS[doc.page-1], f'section-{doc.page}', 0)
     canvas.restoreState()
 
 doc = SimpleDocTemplate(str(OUTPUT), pagesize=A4, leftMargin=50, rightMargin=50, topMargin=55, bottomMargin=51,
                         title=f'fpdf {VERSION} 中文使用说明', author='fpdf contributors', subject='PDF 阅读、目录编辑、AI 问答与选区翻译')
-doc.build(story, onFirstPage=page_frame, onLaterPages=page_frame)
+
+class NumberedCanvas(pdfcanvas.Canvas):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._saved_page_states = []
+
+    def showPage(self):
+        self._saved_page_states.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        total = len(self._saved_page_states)
+        marks = {}
+        for title, page in MARKS:
+            marks.setdefault(page, []).append(title)
+        for state in self._saved_page_states:
+            self.__dict__.update(state)
+            self.saveState()
+            self.setFont('Guide', 9)
+            self.setFillColor(MUTED)
+            self.drawRightString(A4[0]-50, 24, f'{self._pageNumber} / {total}')
+            self.restoreState()
+            for index, title in enumerate(marks.get(self._pageNumber, [])):
+                key = f'section-{self._pageNumber}-{index}'
+                self.bookmarkPage(key)
+                self.addOutlineEntry(title, key, 0, False)
+            pdfcanvas.Canvas.showPage(self)
+        pdfcanvas.Canvas.save(self)
+
+doc.build(story, onFirstPage=page_frame, onLaterPages=page_frame, canvasmaker=NumberedCanvas)
 print(OUTPUT)
