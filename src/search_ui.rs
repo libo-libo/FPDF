@@ -322,6 +322,10 @@ impl SearchUi {
                                 ui.set_min_height(78.0);
                                 ui.strong(format!("第 {} 页", hit.page + 1));
                                 let mut job = preview_job(hit, ui.visuals().text_color());
+                                for section in &mut job.sections {
+                                    section.format.font_id =
+                                        egui::TextStyle::Body.resolve(ui.style());
+                                }
                                 job.wrap.max_rows = 3;
                                 job.wrap.overflow_character = Some('…');
                                 ui.add(egui::Label::new(job).wrap().selectable(false));
