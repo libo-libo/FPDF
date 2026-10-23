@@ -130,12 +130,12 @@ impl AiReader {
     }
 
     fn save_config_editor(&mut self) -> Result<(), String> {
-        let path = user_config_path(std::env::var_os("APPDATA"))?;
+        let path = user_config_path(None)?;
         save_config(&path, &self.config_endpoint, &self.config_key)?;
         self.config = Some(path);
         self.config_initialized = true;
         self.reset();
-        self.status = "AI 配置已保存到当前 Windows 用户目录。".into();
+        self.status = "AI 配置已保存到当前用户配置目录。".into();
         Ok(())
     }
 
@@ -181,7 +181,7 @@ impl AiReader {
             if let Some(path) = std::env::var_os("FPDF_AGENT_CONFIG") {
                 candidates.push(PathBuf::from(path));
             }
-            if let Ok(path) = user_config_path(std::env::var_os("APPDATA")) {
+            if let Ok(path) = user_config_path(None) {
                 candidates.push(path);
             }
             if let Ok(exe) = std::env::current_exe()
@@ -227,12 +227,15 @@ impl AiReader {
             } else {
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime/ai")
             };
-            if !runtime.join("node.exe").is_file() || !runtime.join("bridge.mjs").is_file() {
+            if !runtime.join("bridge.mjs").is_file() {
                 return Err(
                     "AI 运行文件不完整，请重新安装完整安装包；免安装版须完整解压 ai 目录。".into(),
                 );
             }
-            let mut command = Command::new(runtime.join("node.exe"));
+            let node = crate::platform::node_executable(&runtime).ok_or(
+                "未找到 AI 所需的 Node.js。请使用完整 Linux 安装包，或把 node 放入 ai 目录。",
+            )?;
+            let mut command = Command::new(node);
             command
                 .arg(runtime.join("bridge.mjs"))
                 .stdin(Stdio::piped())
@@ -428,12 +431,15 @@ impl AiReader {
                 if import.clicked() {
                     let (sender, receiver) = mpsc::channel();
                     self.config_import = Some(receiver);
-                    let ctx = ctx.clone();
-                    std::thread::spawn(move || {
-                        let path = rfd::FileDialog::new().set_title("导入 AI 配置（两行 agent.txt）").add_filter("Agent 配置", &["txt"]).pick_file();
-                        let _ = sender.send(path);
-                        ctx.request_repaint();
-                    });
+                    // Native file dialogs must run on the UI thread. The dialog itself is
+                    // modal; importing the selected file remains asynchronous.
+                    let path = crate::dialogs::pick_file(
+                        "导入 AI 配置（两行 agent.txt）",
+                        "Agent 配置",
+                        "txt",
+                    );
+                    let _ = sender.send(path);
+                    ctx.request_repaint();
                 }
                 if ui.small_button("清空").clicked() { self.reset(); }
             });
@@ -446,7 +452,7 @@ impl AiReader {
                     ui.label("API 密钥");
                     let key = ui.add(egui::TextEdit::singleline(&mut self.config_key).password(true).desired_width(f32::INFINITY).hint_text("填写服务商提供的密钥"));
                     self.controls.insert("ai-config-key", key.rect);
-                    ui.label(egui::RichText::new("默认模型 GLM-5.3-Flash；连接后可切换可用模型。配置保存在当前用户的 AppData 中。密钥以本地文本保存，请勿分享配置文件。").small().weak());
+                    ui.label(egui::RichText::new("默认模型 GLM-5.3-Flash；连接后可切换可用模型。配置保存在当前用户的配置目录中。密钥以本地文本保存，请勿分享配置文件。").small().weak());
                     let save = ui.button("保存并连接");
                     self.controls.insert("ai-config-save", save.rect);
                     if save.clicked() {
@@ -696,11 +702,9 @@ impl AiReader {
     }
 }
 
-fn user_config_path(appdata: Option<std::ffi::OsString>) -> Result<PathBuf, String> {
-    appdata
-        .filter(|path| !path.is_empty())
-        .map(|path| PathBuf::from(path).join("fpdf/agent.txt"))
-        .ok_or_else(|| "无法定位 Windows 用户配置目录（APPDATA）。请检查用户环境后重试。".into())
+fn user_config_path(base: Option<std::ffi::OsString>) -> Result<PathBuf, String> {
+    crate::platform::config_path_from(base.or_else(crate::platform::config_base), "agent.txt")
+        .ok_or_else(|| "无法定位用户配置目录。请检查 HOME 或 XDG_CONFIG_HOME 环境后重试。".into())
 }
 
 fn validate_config(endpoint: &str, key: &str) -> Result<(String, String), String> {
@@ -879,7 +883,7 @@ mod tests {
             std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
             1
         );
-        assert!(super::user_config_path(None).is_err());
+        assert!(super::user_config_path(Some(Default::default())).is_err());
     }
 
     #[test]

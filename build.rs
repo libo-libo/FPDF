@@ -69,6 +69,11 @@ fn main() {
     for name in ["RC", "WINDRES", "WindowsSdkDir", "ProgramFiles(x86)"] {
         println!("cargo:rerun-if-env-changed={name}");
     }
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        // Keep bundled X11 runtime libraries discoverable through the launcher symlink.
+        println!("cargo:rustc-link-arg-bin=fpdf=-Wl,--disable-new-dtags,-rpath,$ORIGIN");
+        return;
+    }
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }

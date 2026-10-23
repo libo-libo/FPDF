@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=fpdf PDF Reader
+Name[zh_CN]=fpdf PDF 阅读器
+Comment=Read PDF documents
+Comment[zh_CN]=阅读 PDF 文档
+Exec="%EXEC%" %f
+TryExec=%EXEC%
+Icon=%ICON%
+Terminal=false
+Categories=Office;Viewer;
+MimeType=application/pdf;
+StartupNotify=true
+StartupWMClass=fpdf

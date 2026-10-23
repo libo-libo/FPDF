@@ -15,9 +15,7 @@ impl Default for ThemeSettings {
 }
 impl ThemeSettings {
     fn path() -> Option<PathBuf> {
-        std::env::var_os("APPDATA")
-            .map(PathBuf::from)
-            .map(|p| p.join("fpdf/reading-theme.txt"))
+        crate::platform::config_path("reading-theme.txt")
     }
     pub fn load() -> Self {
         Self::path()

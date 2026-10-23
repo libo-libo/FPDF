@@ -177,7 +177,7 @@ impl ReaderApp {
             style.spacing.item_spacing = Vec2::new(7.0, 6.0);
             egui_ctx.set_style(style);
             egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
-            for font in ["C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simhei.ttf"] {
+            for font in crate::platform::font_candidates() {
                 if let Ok(bytes) = std::fs::read(font) {
                     let mut fonts = egui::FontDefinitions::default();
                     fonts
@@ -528,10 +528,7 @@ impl ReaderApp {
         }
     }
     fn choose_file(&mut self) {
-        if let Some(paths) = rfd::FileDialog::new()
-            .add_filter("PDF 文档", &["pdf"])
-            .pick_files()
-        {
+        if let Some(paths) = crate::dialogs::pick_files("打开 PDF", "PDF 文档", "pdf") {
             self.pending_tab_paths.extend(paths);
         }
     }
@@ -719,11 +716,13 @@ impl ReaderApp {
             return;
         };
         let output = if save_as {
-            let Some(output) = rfd::FileDialog::new()
-                .add_filter("PDF 文档", &["pdf"])
-                .set_file_name("标注副本.pdf")
-                .save_file()
-            else {
+            let Some(output) = crate::dialogs::save_file(
+                "高亮标注另存为",
+                "PDF 文档",
+                "pdf",
+                path.parent(),
+                Some("标注副本.pdf"),
+            ) else {
                 return;
             };
             output
@@ -1300,7 +1299,7 @@ impl ReaderApp {
                         if ui.button("关闭标签页 · Ctrl+W").clicked() {self.tab_action=Some(tabs::TabAction::Close);ui.close();}
                         if ui.button("新窗口 · Ctrl+N").clicked() {self.new_window(None);ui.close();}
                         if ui.button("在新窗口打开 PDF…").clicked() {
-                            if let Some(path)=rfd::FileDialog::new().add_filter("PDF 文档", &["pdf"]).pick_file() {self.new_window(Some(path));}
+                            if let Some(path)=crate::dialogs::pick_file("在新窗口打开 PDF", "PDF 文档", "pdf") {self.new_window(Some(path));}
                             ui.close();
                         }
                         if ui.button("打开 PDF…").clicked() {self.choose_file();ui.close();}
@@ -2981,10 +2980,10 @@ impl ReaderApp {
                             ctx.request_repaint_after(Duration::from_millis(100));
                             return;
                         }
-                        let path = PathBuf::from(std::env::var_os("APPDATA").unwrap())
-                            .join("fpdf/agent.txt");
+                        let path = crate::platform::config_path("agent.txt")
+                            .expect("Installed settings need a user config path");
                         let saved = std::fs::read_to_string(path)
-                            .expect("Installed settings must persist in isolated APPDATA");
+                            .expect("Installed settings must persist in the isolated config home");
                         let lines: Vec<_> = saved.lines().collect();
                         assert!(
                             lines.first().is_some_and(|line| *line
@@ -3027,7 +3026,7 @@ impl ReaderApp {
                         self.ai.assert_smoke_answer();
                         assert_eq!(self.ai.translation_run_count(), 0);
                         println!(
-                            "Installed settings UI verified: fresh isolated APPDATA, masked API config save, actual connection, setup usable while busy, direct question and cited answer without translation"
+                            "Installed settings UI verified: fresh isolated config home, masked API config save, actual connection, setup usable while busy, direct question and cited answer without translation"
                         );
                     }
                     _ => {}

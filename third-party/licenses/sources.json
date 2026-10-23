@@ -1,50 +1,56 @@
-﻿[
-    {
-        "sha256":  "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c",
-        "url":  "https://raw.githubusercontent.com/emilk/egui/44cdd653e2317d300fb8a6c9c36b03f23991e803/LICENSE-MIT",
-        "file":  "LICENSE-MIT",
-        "package":  "egui-0.33.3"
-    },
-    {
-        "sha256":  "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90",
-        "url":  "https://raw.githubusercontent.com/emilk/egui/44cdd653e2317d300fb8a6c9c36b03f23991e803/LICENSE-APACHE",
-        "file":  "LICENSE-APACHE",
-        "package":  "egui-0.33.3"
-    },
-    {
-        "sha256":  "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
-        "url":  "https://raw.githubusercontent.com/DoumanAsh/clipboard-win/3b27cf2bfd1adcfa6e0264eb51c1025ddaf0f342/LICENSE",
-        "file":  "LICENSE",
-        "package":  "clipboard-win-5.4.1"
-    },
-    {
-        "sha256":  "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-        "url":  "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/LICENSE",
-        "file":  "LICENSE",
-        "package":  "gl_generator-0.14.0"
-    },
-    {
-        "sha256":  "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-        "url":  "https://raw.githubusercontent.com/brendanzab/gl-rs/f150967b1c44ae888e6676f93f639ebc82771bdc/LICENSE",
-        "file":  "LICENSE",
-        "package":  "khronos_api-3.1.0"
-    },
-    {
-        "sha256":  "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333",
-        "url":  "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT",
-        "file":  "LICENSE-MIT",
-        "package":  "profiling-1.0.18"
-    },
-    {
-        "sha256":  "10d30a673cd5e9349bdc02aeb48f14b3386d27d0da32df8f0a555d4aa16aa551",
-        "url":  "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-APACHE",
-        "file":  "LICENSE-APACHE",
-        "package":  "profiling-1.0.18"
-    },
-    {
-        "sha256": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae",
-        "url": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/ae42d22078b98549e987d2f03d12df7b984fde47/LICENSE",
-        "file": "LICENSE",
-        "package": "alloc-stdlib-0.2.4"
-    }
+[
+  {
+    "sha256": "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c",
+    "url": "https://raw.githubusercontent.com/emilk/egui/44cdd653e2317d300fb8a6c9c36b03f23991e803/LICENSE-MIT",
+    "file": "LICENSE-MIT",
+    "package": "egui-0.33.3"
+  },
+  {
+    "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90",
+    "url": "https://raw.githubusercontent.com/emilk/egui/44cdd653e2317d300fb8a6c9c36b03f23991e803/LICENSE-APACHE",
+    "file": "LICENSE-APACHE",
+    "package": "egui-0.33.3"
+  },
+  {
+    "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+    "url": "https://raw.githubusercontent.com/DoumanAsh/clipboard-win/3b27cf2bfd1adcfa6e0264eb51c1025ddaf0f342/LICENSE",
+    "file": "LICENSE",
+    "package": "clipboard-win-5.4.1"
+  },
+  {
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "url": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/LICENSE",
+    "file": "LICENSE",
+    "package": "gl_generator-0.14.0"
+  },
+  {
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "url": "https://raw.githubusercontent.com/brendanzab/gl-rs/f150967b1c44ae888e6676f93f639ebc82771bdc/LICENSE",
+    "file": "LICENSE",
+    "package": "khronos_api-3.1.0"
+  },
+  {
+    "sha256": "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333",
+    "url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT",
+    "file": "LICENSE-MIT",
+    "package": "profiling-1.0.18"
+  },
+  {
+    "sha256": "10d30a673cd5e9349bdc02aeb48f14b3386d27d0da32df8f0a555d4aa16aa551",
+    "url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-APACHE",
+    "file": "LICENSE-APACHE",
+    "package": "profiling-1.0.18"
+  },
+  {
+    "sha256": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae",
+    "url": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/ae42d22078b98549e987d2f03d12df7b984fde47/LICENSE",
+    "file": "LICENSE",
+    "package": "alloc-stdlib-0.2.4"
+  },
+  {
+    "sha256": "0457f5bcec3b3b211605dfb5d1a49042fd638f3686a410fe099c24a25af13c48",
+    "url": "https://raw.githubusercontent.com/earendil-works/pi/v1.3.0/LICENSE",
+    "file": "LICENSE",
+    "package": "pi-1.3.0"
+  }
 ]

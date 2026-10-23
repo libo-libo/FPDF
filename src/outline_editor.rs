@@ -288,14 +288,13 @@ impl OutlineEditor {
                             .file_stem()
                             .unwrap_or_default()
                             .to_string_lossy();
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("PDF 文档", &["pdf"])
-                            .set_directory(
-                                self.source.parent().unwrap_or(std::path::Path::new(".")),
-                            )
-                            .set_file_name(format!("{stem}-目录.pdf"))
-                            .save_file()
-                        {
+                        if let Some(path) = crate::dialogs::save_file(
+                            "目录另存为",
+                            "PDF 文档",
+                            "pdf",
+                            self.source.parent(),
+                            Some(&format!("{stem}-目录.pdf")),
+                        ) {
                             self.save(path);
                         }
                     }

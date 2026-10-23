@@ -298,15 +298,15 @@ pub fn library_path() -> Result<PathBuf, PdfError> {
     if adjacent.is_file() {
         return Ok(adjacent);
     }
-    let project = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("runtime")
-        .join("bin")
-        .join(file);
-    if project.is_file() {
-        return Ok(project);
+    let runtime = Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime");
+    for directory in ["bin", "lib"] {
+        let project = runtime.join(directory).join(file);
+        if project.is_file() {
+            return Ok(project);
+        }
     }
     Err(PdfError::new(
-        "未找到 PDF 引擎。请运行 scripts/fetch-pdfium.ps1，或将 pdfium.dll 放在 fpdf.exe 旁边。",
+        "未找到 PDF 引擎。请运行 scripts/fetch-pdfium.sh，或将 libpdfium.so 放在 fpdf 可执行文件旁边。",
     ))
 }
 

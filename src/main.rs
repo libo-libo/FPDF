@@ -3,10 +3,12 @@
 mod ai_reader;
 mod app;
 mod color_palette;
+mod dialogs;
 mod inline_outline;
 mod keyboard;
 mod outline_editor;
 mod outline_folding;
+mod platform;
 mod search_ui;
 mod text_selection;
 mod theme_settings;
@@ -43,7 +45,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.first().is_some_and(|a| a == "--help" || a == "-h") {
         println!(
-            "fpdf [document.pdf]\nfpdf --render document.pdf --output page.png [--page 1] [--width 1200] [--rotate 0]\nfpdf --smoke-ui document.pdf --screenshot window.png [--features] [--screenshot-night]\n\nDesktop: Ctrl+O open, PgUp/PgDn pages, Ctrl+Home/End first/last, Alt+Left/Right history, Ctrl+F find, Ctrl+0 fit width, Ctrl+1 actual size, Ctrl+plus/minus or Ctrl+wheel document zoom.\nPDF engine: adjacent pdfium.dll, or FPDF_PDFIUM_PATH."
+            "fpdf [document.pdf]\nfpdf --render document.pdf --output page.png [--page 1] [--width 1200] [--rotate 0]\nfpdf --smoke-ui document.pdf --screenshot window.png [--features] [--screenshot-night]\n\nDesktop: Ctrl+O open, PgUp/PgDn pages, Ctrl+Home/End first/last, Alt+Left/Right history, Ctrl+F find, Ctrl+0 fit width, Ctrl+1 actual size, Ctrl+plus/minus or Ctrl+wheel document zoom.\nPDF engine: adjacent libpdfium.so, or FPDF_PDFIUM_PATH."
         );
         return Ok(());
     }
@@ -112,17 +114,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err("--settings-features requires --smoke-ui".into());
         }
         let expected = std::env::var_os("FPDF_SMOKE_APPDATA")
-            .ok_or("FPDF_SMOKE_APPDATA is required for isolated settings smoke")?;
-        let actual = std::env::var_os("APPDATA").ok_or("APPDATA is required for settings smoke")?;
+            .or_else(|| std::env::var_os("FPDF_SMOKE_CONFIG_HOME"))
+            .ok_or("FPDF_SMOKE_APPDATA or FPDF_SMOKE_CONFIG_HOME is required")?;
+        let actual = platform::config_base().ok_or("user config directory is unavailable")?;
         if std::fs::canonicalize(PathBuf::from(&expected))?
             != std::fs::canonicalize(PathBuf::from(&actual))?
         {
-            return Err("Settings smoke requires APPDATA to match FPDF_SMOKE_APPDATA".into());
-        }
-        if PathBuf::from(actual).join("fpdf/agent.txt").exists() {
             return Err(
-                "Settings smoke requires a fresh isolated APPDATA without AI config".into(),
+                "Settings smoke config directory does not match the isolated test home".into(),
             );
+        }
+        if platform::config_path("agent.txt").is_some_and(|path| path.exists()) {
+            return Err("Settings smoke requires a fresh isolated config without agent.txt".into());
         }
         for name in ["FPDF_SMOKE_ENDPOINT", "FPDF_SMOKE_KEY"] {
             if std::env::var(name).is_ok_and(|value| !value.trim().is_empty()) {
