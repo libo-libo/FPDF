@@ -32,7 +32,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-for required in fpdf fpdf-bin libfpdf-glx-compat.so libpdfium.so libxkbcommon-x11.so.0 libxcb-xkb.so.1 ai/bridge.mjs ai/node fonts/wqy-microhei.ttc fpdf.desktop.in fpdf.png; do
+for required in fpdf fpdf-bin libfpdf-glx-compat.so libpdfium.so lib/libxkbcommon-x11.so.0 lib/libxcb-xkb.so.1 ai/bridge.mjs ai/node fonts/wqy-microhei.ttc fpdf.desktop.in fpdf.png; do
     [ -f "$SOURCE/$required" ] || {
         echo "Installation files are incomplete: $SOURCE/$required" >&2
         exit 1

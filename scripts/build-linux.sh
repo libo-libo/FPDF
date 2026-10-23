@@ -62,13 +62,14 @@ cc -O2 -fPIC -shared -Wall -Wextra -Werror \
 python3 "$ROOT/scripts/collect-notices.py" --output "$ROOT/dist/THIRD_PARTY_NOTICES.txt"
 
 rm -rf "$STAGE"
-mkdir -p "$STAGE/ai" "$STAGE/fonts" "$STAGE/licenses/PDFium" "$STAGE/licenses/WQY-Micro-Hei" "$STAGE/licenses/X11"
+mkdir -p "$STAGE/ai" "$STAGE/fonts" "$STAGE/lib" "$STAGE/licenses/PDFium" \
+    "$STAGE/licenses/WQY-Micro-Hei" "$STAGE/licenses/X11"
 install -m 755 "$ROOT/target/release/fpdf" "$STAGE/fpdf-bin"
 install -m 755 "$ROOT/packaging/fpdf-launcher.sh" "$STAGE/fpdf"
 install -m 755 "$ROOT/dist/libfpdf-glx-compat.so" "$STAGE/libfpdf-glx-compat.so"
 install -m 755 "$PDFIUM" "$STAGE/libpdfium.so"
-install -m 755 "$XKBCOMMON_X11" "$STAGE/libxkbcommon-x11.so.0"
-install -m 755 "$LIBXCB_XKB" "$STAGE/libxcb-xkb.so.1"
+install -m 755 "$XKBCOMMON_X11" "$STAGE/lib/libxkbcommon-x11.so.0"
+install -m 755 "$LIBXCB_XKB" "$STAGE/lib/libxcb-xkb.so.1"
 cp -a "$ROOT/runtime/ai/." "$STAGE/ai/"
 install -m 644 "$FONT" "$STAGE/fonts/wqy-microhei.ttc"
 install -m 644 "$ROOT/assets/fpdf.png" "$STAGE/fpdf.png"
@@ -103,7 +104,7 @@ if [ -n "$(find "$STAGE" -type f \( -name agent.txt -o -name githubtoken.txt -o 
 fi
 
 python3 "$ROOT/scripts/check-linux-abi.py" "$STAGE/fpdf-bin" "$STAGE/libpdfium.so" "$STAGE/ai/node" \
-    "$STAGE/libxkbcommon-x11.so.0" "$STAGE/libxcb-xkb.so.1" "$STAGE/libfpdf-glx-compat.so"
+    "$STAGE/lib/libxkbcommon-x11.so.0" "$STAGE/lib/libxcb-xkb.so.1" "$STAGE/libfpdf-glx-compat.so"
 readelf -d "$STAGE/fpdf-bin" | grep -F 'Library rpath: [$ORIGIN]' >/dev/null || {
     echo 'fpdf-bin is missing the transitive $ORIGIN runtime library search path.' >&2
     exit 1
