@@ -176,12 +176,12 @@ impl WindowApp {
         egui::TopBottomPanel::top("document-tabs")
             .exact_height(36.0)
             .show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
+                ui.horizontal_top(|ui| {
                     egui::ScrollArea::horizontal()
                         .id_salt("document-tab-scroll")
                         .max_width((ui.available_width() - 48.0).max(100.0))
                         .show(ui, |ui| {
-                            ui.horizontal(|ui| {
+                            ui.horizontal_top(|ui| {
                                 for (index, tab) in self.tabs.iter().enumerate() {
                                     ui.push_id(tab.id, |ui| {
                                         let path = tab.app.path.as_ref();
@@ -211,7 +211,7 @@ impl WindowApp {
                                             action = Some((TabAction::Switch(index), None));
                                         }
                                         let close = ui
-                                            .small_button("×")
+                                            .add_sized([28.0, 28.0], egui::Button::new("×"))
                                             .on_hover_text("关闭标签页 · Ctrl+W");
                                         self.controls
                                             .insert(format!("close-{}", tab.id), close.rect);
@@ -224,7 +224,9 @@ impl WindowApp {
                                 }
                             });
                         });
-                    let plus = ui.button("＋").on_hover_text("新标签页 · Ctrl+T");
+                    let plus = ui
+                        .add_sized([28.0, 28.0], egui::Button::new("＋"))
+                        .on_hover_text("新标签页 · Ctrl+T");
                     self.controls.insert("new-tab".into(), plus.rect);
                     if plus.clicked() {
                         action = Some((TabAction::New, None));

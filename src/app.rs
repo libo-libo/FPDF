@@ -117,6 +117,7 @@ pub struct ReaderApp {
     navigation_tab: NavigationTab,
     ribbon: u8,
     text_panel: bool,
+    toolbar_visible: bool,
     cache: VecDeque<CachedPage>,
     errors: HashMap<RenderTarget, String>,
     wanted: Vec<RenderTarget>,
@@ -275,6 +276,7 @@ impl ReaderApp {
             navigation_tab: NavigationTab::Thumbnails,
             ribbon: 0,
             text_panel: false,
+            toolbar_visible: true,
             cache: VecDeque::new(),
             errors: HashMap::new(),
             wanted: Vec::new(),
@@ -1249,44 +1251,50 @@ impl ReaderApp {
         }
     }
     fn header(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("title")
-            .exact_height(49.0)
-            .frame(
-                egui::Frame::new()
-                    .fill(self.panel())
-                    .inner_margin(egui::Margin::symmetric(18, 8)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
+        if self.toolbar_visible {
+            egui::TopBottomPanel::top("title")
+                .exact_height(
+                    49.0_f32.max(egui::TextStyle::Heading.resolve(&ctx.style()).size * 1.5 + 16.0),
+                )
+                .frame(
                     egui::Frame::new()
-                        .fill(RED)
-                        .corner_radius(5)
-                        .inner_margin(egui::Margin::symmetric(7, 2))
-                        .show(ui, |ui| {
-                            ui.label(RichText::new("P").size(21.0).strong().color(Color32::WHITE));
+                        .fill(self.panel())
+                        .inner_margin(egui::Margin::symmetric(18, 8)),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        egui::Frame::new()
+                            .fill(RED)
+                            .corner_radius(5)
+                            .inner_margin(egui::Margin::symmetric(7, 2))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    RichText::new("P").heading().strong().color(Color32::WHITE),
+                                );
+                            });
+                        ui.label(RichText::new("fpdf").heading().strong());
+                        ui.add_space(18.0);
+                        ui.label(RichText::new("PDF 阅读").color(RED));
+                        ui.separator();
+                        let name = self
+                            .path
+                            .as_ref()
+                            .and_then(|p| p.file_name())
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "开始阅读".into());
+                        ui.add_sized(
+                            [(ui.available_width() - 110.0).max(10.0), 28.0],
+                            egui::Label::new(RichText::new(&name).color(self.muted())).truncate(),
+                        )
+                        .on_hover_text(name);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("打开文件").clicked() {
+                                self.choose_file();
+                            }
                         });
-                    ui.label(RichText::new("fpdf").size(21.0).strong());
-                    ui.add_space(18.0);
-                    ui.label(RichText::new("PDF 阅读").color(RED));
-                    ui.separator();
-                    let name = self
-                        .path
-                        .as_ref()
-                        .and_then(|p| p.file_name())
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "开始阅读".into());
-                    ui.add_sized(
-                        [(ui.available_width() - 110.0).max(10.0), 28.0],
-                        egui::Label::new(RichText::new(&name).color(self.muted())).truncate(),
-                    )
-                    .on_hover_text(name);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("打开文件").clicked() {
-                            self.choose_file();
-                        }
                     });
                 });
-            });
+        }
         egui::TopBottomPanel::top("navigation-ribbon")
             .exact_height(34.0)
             .show(ctx, |ui| {
@@ -1315,17 +1323,45 @@ impl ReaderApp {
                     ui.selectable_value(&mut self.ribbon, 0, "开始");
                     ui.selectable_value(&mut self.ribbon, 1, "阅读");
                     ui.selectable_value(&mut self.ribbon, 2, "视图");
+                    let navigation = ui.toggle_value(&mut self.sidebar, "导航窗格");
+                    self.hit("navigation-toggle", navigation);
+                    let toolbar = ui.toggle_value(&mut self.toolbar_visible, "工具栏");
+                    self.hit("toolbar-toggle", toolbar);
+                    let default_size = egui::Style::default().text_styles[&egui::TextStyle::Body].size;
+                    let scale_id = egui::Id::new("interface-font-scale");
+                    let current_scale = ctx.style().text_styles[&egui::TextStyle::Body].size / default_size;
+                    let mut ui_scale = ctx.data(|data| data.get_temp::<f32>(scale_id)).unwrap_or(current_scale);
+                    ui.label(format!("界面字号 · {:.0}%", ui_scale * 100.0));
+                    let font = ui.add(
+                        egui::Slider::new(&mut ui_scale, 0.75..=1.75)
+                            .show_value(false)
+                            .trailing_fill(true),
+                    );
+                    self.hit("interface-font-size", font.clone());
+                    ctx.data_mut(|data| data.insert_temp(scale_id, ui_scale));
+                    if !font.dragged() && ui_scale != current_scale {
+                        ctx.style_mut(|style| {
+                            style.text_styles = egui::Style::default().text_styles;
+                            for font in style.text_styles.values_mut() {
+                                font.size *= ui_scale;
+                            }
+                        });
+                    }
                 });
             });
-        egui::TopBottomPanel::top("toolbar")
-            .exact_height(108.0)
+        if self.toolbar_visible {
+            let toolbar = egui::TopBottomPanel::top("toolbar")
+            .resizable(true)
+            .default_height(108.0)
+            .height_range(62.0..=260.0)
             .frame(
                 egui::Frame::new()
                     .fill(self.panel())
                     .inner_margin(egui::Margin::symmetric(14, 7)),
             )
             .show(ctx, |ui| {
-                egui::ScrollArea::horizontal()
+                egui::ScrollArea::both()
+                    .auto_shrink([false, false])
                     .id_salt("toolbar-scroll")
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -1578,6 +1614,11 @@ impl ReaderApp {
                         });
                     });
             });
+            if self.smoke_features {
+                self.smoke_hits
+                    .insert("toolbar-panel".into(), toolbar.response.rect);
+            }
+        }
     }
     fn navigation(&mut self, ctx: &egui::Context) {
         self.thumbnails.clear();
@@ -1589,6 +1630,20 @@ impl ReaderApp {
             .default_width(190.0)
             .min_width(155.0)
             .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let toolbar = ui.toggle_value(&mut self.toolbar_visible, "顶部栏");
+                    self.hit("navigation-toolbar-toggle", toolbar);
+                    let close = ui.small_button("关闭 ×");
+                    if self.hit("navigation-close", close).clicked() {
+                        self.sidebar = false;
+                    }
+                });
+                ui.label(
+                    RichText::new("拖动顶部工具栏下边缘调整高度")
+                        .small()
+                        .color(self.muted()),
+                );
+                ui.separator();
                 ui.add_space(7.0);
                 ui.horizontal(|ui| {
                     let thumbnails = ui.selectable_value(
@@ -1835,7 +1890,7 @@ impl ReaderApp {
                                     paper.center(),
                                     egui::Align2::CENTER_CENTER,
                                     (n + 1).to_string(),
-                                    egui::FontId::proportional(16.0),
+                                    egui::TextStyle::Body.resolve(ui.style()),
                                     Color32::GRAY,
                                 );
                             }
@@ -1857,7 +1912,7 @@ impl ReaderApp {
                                 egui::pos2(rect.center().x, rect.bottom() - 15.0),
                                 egui::Align2::CENTER_CENTER,
                                 format!("第 {} 页", n + 1),
-                                egui::FontId::proportional(12.0),
+                                egui::TextStyle::Small.resolve(ui.style()),
                                 if n as u32 == self.page {
                                     RED
                                 } else {
@@ -3526,7 +3581,7 @@ impl ReaderApp {
                 && !self.smoke_search
                 && !self.smoke_settings
                 && !self.smoke_highlight
-                && self.smoke_step < 30
+                && self.smoke_step < 42
             {
                 match self.smoke_step {
                     0 => {
@@ -3736,6 +3791,97 @@ impl ReaderApp {
                         self.navigation_tab = NavigationTab::Outline;
                         println!(
                             "Zoom UI verified: status/ribbon plus and minus change page width, percentage Enter, slider, Ctrl+wheel, Ctrl+minus, actual size, fit width/page; toolbar scale unchanged"
+                        );
+                    }
+                    30 => self.click_test_control("navigation-toolbar-toggle"),
+                    31 => {
+                        assert!(!self.toolbar_visible);
+                        self.click_test_control("toolbar-toggle");
+                    }
+                    32 => {
+                        assert!(self.toolbar_visible);
+                        let panel = self.smoke_hits["toolbar-panel"];
+                        self.smoke_zoom_before = panel.height();
+                        let pos = egui::pos2(panel.center().x, panel.bottom() - 1.0);
+                        self.smoke_events = vec![
+                            egui::Event::PointerMoved(pos),
+                            egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed: true,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ];
+                    }
+                    33 => {
+                        let panel = self.smoke_hits["toolbar-panel"];
+                        self.smoke_events = vec![egui::Event::PointerMoved(egui::pos2(
+                            panel.center().x,
+                            panel.bottom() + 55.0,
+                        ))];
+                    }
+                    34 => {
+                        let panel = self.smoke_hits["toolbar-panel"];
+                        assert!(
+                            panel.height() > self.smoke_zoom_before + 30.0,
+                            "dragging toolbar edge must increase its height"
+                        );
+                        self.smoke_events = vec![egui::Event::PointerButton {
+                            pos: egui::pos2(panel.center().x, panel.bottom() + 55.0),
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: egui::Modifiers::NONE,
+                        }];
+                    }
+                    35 => self.click_test_control("navigation-close"),
+                    36 => {
+                        assert!(!self.sidebar);
+                        self.click_test_control("navigation-toggle");
+                    }
+                    37 => {
+                        assert!(self.sidebar);
+                        self.click_test_control("navigation-toolbar-toggle");
+                    }
+                    38 => {
+                        assert!(!self.toolbar_visible);
+                        self.click_test_control("toolbar-toggle");
+                        println!(
+                            "Toolbar UI verified: navigation toggle, recovery with toolbar hidden, vertical edge drag, navigation close and reopen"
+                        );
+                    }
+                    39 => {
+                        let rect = self.smoke_hits["interface-font-size"];
+                        self.smoke_zoom_before =
+                            ctx.style().text_styles[&egui::TextStyle::Body].size;
+                        let pos = egui::pos2(rect.right() - 8.0, rect.center().y);
+                        self.smoke_events = vec![
+                            egui::Event::PointerMoved(pos),
+                            egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed: true,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ];
+                    }
+                    40 => {
+                        let rect = self.smoke_hits["interface-font-size"];
+                        let pos = egui::pos2(rect.right() - 8.0, rect.center().y);
+                        self.smoke_events = vec![egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: egui::Modifiers::NONE,
+                        }];
+                    }
+                    41 => {
+                        assert!(
+                            ctx.style().text_styles[&egui::TextStyle::Body].size
+                                > self.smoke_zoom_before
+                        );
+                        assert_eq!(ctx.zoom_factor(), 1.0);
+                        println!(
+                            "Interface font slider verified: shared fonts enlarged; document coordinate scale unchanged"
                         );
                     }
                     _ => {}
