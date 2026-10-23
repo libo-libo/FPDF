@@ -18,7 +18,7 @@ Linux x64 PDF 阅读器，使用 Rust 编写。支持连续阅读、多标签、
 | `fpdf-0.8.5-linux-x64.tar.gz` | 解压后进入版本目录，执行 `./install.sh`。不安装也可直接运行 `./fpdf`。 |
 | `fpdf-0.8.5-linux-x64.sha256` | 下载校验值，使用以下命令核对。 |
 
-要求 x86_64 Linux、glibc 2.28 或更新版本，已验证 AlmaLinux 8 / EL8。需要 X11 图形会话或 SSH X11 转发，以及 GTK 3.22 或更新版本。发行包自带 PDFium、Node.js、AI bridge、中文字体及 X11 运行库，无需安装 Rust、Node.js 或开发工具。安装和运行均使用普通用户权限，不需要 root；除可选的 AI 服务外也不需要联网。**保留整个程序目录**，包括 `libpdfium.so`、`ai/` 和许可证，不能只复制 `fpdf` 可执行文件。
+要求 x86_64 Linux、glibc 2.28 或更新版本，已验证 AlmaLinux 8 / EL8。需要 X11 图形会话或 SSH X11 转发，以及 GTK 3.22 或更新版本。发行包自带 PDFium、Node.js、AI bridge、中文字体及 X11 运行库，无需安装 Rust、Node.js 或开发工具。安装和运行均使用普通用户权限，不需要 root；除可选的 AI 服务外也不需要联网。**保留整个程序目录**，包括 `fpdf-bin`、`libpdfium.so`、`libfpdf-glx-compat.so`、`ai/` 和许可证。`fpdf` 是启动脚本，它会加载同目录下的 GLX 兼容库后再运行 `fpdf-bin`；只复制其中某一个文件无法运行。
 
 在当前目录计算文件 SHA-256，与同版本的 `.sha256` 文件对照：
 
@@ -148,7 +148,7 @@ YOUR_API_KEY
 | `Ctrl++` / `Ctrl+-` / `Ctrl+滚轮` | 缩放 |
 | `Ctrl+Enter` | 在文档问答输入框发送 |
 
-- `GLXBadContextTag` 或无法打开窗口：检查 `DISPLAY`、X11 转发和客户端 X server；确认安装目录中的两个 X11 运行库仍在。GL/EGL 不可用时可尝试 `LIBGL_ALWAYS_SOFTWARE=1 fpdf`。
+- `GLXBadContextTag` 或无法打开窗口：发行版自带的 `libfpdf-glx-compat.so` 会绕过旧版 Mesa 的交换间隔报错，请从安装目录用 `./fpdf` 或 `~/.local/bin/fpdf` 启动，并确认该文件与 `fpdf-bin` 仍在；若手工运行 `fpdf-bin`，需要自行设置 `LD_PRELOAD`。同时检查 `DISPLAY`、X11 转发和客户端 X server；GL/EGL 不可用时可尝试 `LIBGL_ALWAYS_SOFTWARE=1 fpdf`。
 - 缺少 `libpdfium.so`：完整安装或解压，保留整个目录。
 - AI 无法连接：保留 `ai/`，检查配置格式、服务地址、密钥与模型权限。
 - 文件选择窗口不出现：确认系统安装 GTK 3.22 或更新版本；也可直接将 PDF 路径作为参数传入。

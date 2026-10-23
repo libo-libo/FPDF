@@ -52,11 +52,20 @@ fi
     cargo build --release --locked
 )
 
+# The launcher preloads this shim so Mesa's swap interval request cannot abort
+# window creation. See packaging/glx-compat.c.
+cc -O2 -fPIC -shared -Wall -Wextra -Werror \
+    -Wl,-soname,libfpdf-glx-compat.so \
+    -o "$ROOT/dist/libfpdf-glx-compat.so" \
+    "$ROOT/packaging/glx-compat.c" -ldl
+
 python3 "$ROOT/scripts/collect-notices.py" --output "$ROOT/dist/THIRD_PARTY_NOTICES.txt"
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE/ai" "$STAGE/fonts" "$STAGE/licenses/PDFium" "$STAGE/licenses/WQY-Micro-Hei" "$STAGE/licenses/X11"
-install -m 755 "$ROOT/target/release/fpdf" "$STAGE/fpdf"
+install -m 755 "$ROOT/target/release/fpdf" "$STAGE/fpdf-bin"
+install -m 755 "$ROOT/packaging/fpdf-launcher.sh" "$STAGE/fpdf"
+install -m 755 "$ROOT/dist/libfpdf-glx-compat.so" "$STAGE/libfpdf-glx-compat.so"
 install -m 755 "$PDFIUM" "$STAGE/libpdfium.so"
 install -m 755 "$XKBCOMMON_X11" "$STAGE/libxkbcommon-x11.so.0"
 install -m 755 "$LIBXCB_XKB" "$STAGE/libxcb-xkb.so.1"
@@ -84,7 +93,8 @@ printf '%s\n' "$VERSION" > "$STAGE/VERSION"
 cat > "$STAGE/licenses/Node.js-source.json" <<EOF
 {"version":"$NODE_VERSION","archive":"$NODE_NAME.tar.xz","url":"https://unofficial-builds.nodejs.org/download/release/$NODE_VERSION/$NODE_NAME.tar.xz","sha256":"fb8ae2b650b593b2db2c6e01d69f3dd13661e21b333f8393d661be1e46ea5e82","note":"glibc 2.17 compatible build used for the EL8 baseline"}
 EOF
-chmod 755 "$STAGE/fpdf" "$STAGE/ai/node" "$STAGE/install.sh" "$STAGE/uninstall.sh"
+chmod 755 "$STAGE/fpdf" "$STAGE/fpdf-bin" "$STAGE/libfpdf-glx-compat.so" \
+    "$STAGE/ai/node" "$STAGE/install.sh" "$STAGE/uninstall.sh"
 chmod 644 "$STAGE/fpdf.png" "$STAGE/fpdf.svg" "$STAGE/fpdf.desktop.in"
 
 if [ -n "$(find "$STAGE" -type f \( -name agent.txt -o -name githubtoken.txt -o -name .env -o -name '.env.*' \) -print)" ]; then
@@ -92,14 +102,18 @@ if [ -n "$(find "$STAGE" -type f \( -name agent.txt -o -name githubtoken.txt -o 
     exit 1
 fi
 
-python3 "$ROOT/scripts/check-linux-abi.py" "$STAGE/fpdf" "$STAGE/libpdfium.so" "$STAGE/ai/node" \
-    "$STAGE/libxkbcommon-x11.so.0" "$STAGE/libxcb-xkb.so.1"
-readelf -d "$STAGE/fpdf" | grep -F 'Library rpath: [$ORIGIN]' >/dev/null || {
-    echo 'fpdf is missing the transitive $ORIGIN runtime library search path.' >&2
+python3 "$ROOT/scripts/check-linux-abi.py" "$STAGE/fpdf-bin" "$STAGE/libpdfium.so" "$STAGE/ai/node" \
+    "$STAGE/libxkbcommon-x11.so.0" "$STAGE/libxcb-xkb.so.1" "$STAGE/libfpdf-glx-compat.so"
+readelf -d "$STAGE/fpdf-bin" | grep -F 'Library rpath: [$ORIGIN]' >/dev/null || {
+    echo 'fpdf-bin is missing the transitive $ORIGIN runtime library search path.' >&2
     exit 1
 }
-printf '\nDynamic dependencies of fpdf:\n'
-ldd "$STAGE/fpdf" || true
+printf '\nDynamic dependencies of fpdf-bin:\n'
+ldd "$STAGE/fpdf-bin" || true
+"$STAGE/fpdf" --help >/dev/null || {
+    echo 'The fpdf launcher failed to start fpdf-bin.' >&2
+    exit 1
+}
 
 if command -v desktop-file-validate >/dev/null 2>&1; then
     DESKTOP_CHECK=$(mktemp --suffix=.desktop)
