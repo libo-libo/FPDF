@@ -86,6 +86,7 @@ enum GtkMode {
 mod gtk {
     use super::GtkMode;
     use libloading::Library;
+    use std::cell::Cell;
     use std::ffi::{CStr, CString, c_char, c_int, c_void};
     use std::path::{Path, PathBuf};
     use std::ptr;
@@ -105,6 +106,7 @@ mod gtk {
     struct Api {
         _gtk: Library,
         _glib: Library,
+        _gdk: Library,
         init_check: unsafe extern "C" fn(*mut c_int, *mut *mut *mut c_char) -> c_int,
         dialog_new: unsafe extern "C" fn(
             *const c_char,
@@ -124,6 +126,21 @@ mod gtk {
         get_filenames: unsafe extern "C" fn(*mut c_void) -> *mut GSList,
         dialog_run: unsafe extern "C" fn(*mut c_void) -> c_int,
         widget_destroy: unsafe extern "C" fn(*mut c_void),
+        widget_get_window: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
+        window_present: unsafe extern "C" fn(*mut c_void),
+        window_is_viewable: unsafe extern "C" fn(*mut c_void) -> c_int,
+        window_focus: unsafe extern "C" fn(*mut c_void, u32),
+        timeout_add: unsafe extern "C" fn(
+            u32,
+            unsafe extern "C" fn(*mut c_void) -> c_int,
+            *mut c_void,
+        ) -> u32,
+        source_remove: unsafe extern "C" fn(u32) -> c_int,
+        events_pending: unsafe extern "C" fn() -> c_int,
+        main_iteration_do: unsafe extern "C" fn(c_int) -> c_int,
+        display_get_default: unsafe extern "C" fn() -> *mut c_void,
+        display_flush: unsafe extern "C" fn(*mut c_void),
+        display_sync: unsafe extern "C" fn(*mut c_void),
         slist_free: unsafe extern "C" fn(*mut GSList),
         free: unsafe extern "C" fn(*mut c_void),
     }
@@ -135,6 +152,7 @@ mod gtk {
             unsafe {
                 let gtk = Library::new("libgtk-3.so.0").ok()?;
                 let glib = Library::new("libglib-2.0.so.0").ok()?;
+                let gdk = Library::new("libgdk-3.so.0").ok()?;
                 macro_rules! symbol {
                     ($library:expr, $name:literal, $type:ty) => {
                         *$library
@@ -214,10 +232,70 @@ mod gtk {
                         "gtk_widget_destroy",
                         unsafe extern "C" fn(*mut c_void)
                     ),
+                    widget_get_window: symbol!(
+                        gtk,
+                        "gtk_widget_get_window",
+                        unsafe extern "C" fn(*mut c_void) -> *mut c_void
+                    ),
+                    window_present: symbol!(
+                        gtk,
+                        "gtk_window_present",
+                        unsafe extern "C" fn(*mut c_void)
+                    ),
+                    window_is_viewable: symbol!(
+                        gdk,
+                        "gdk_window_is_viewable",
+                        unsafe extern "C" fn(*mut c_void) -> c_int
+                    ),
+                    window_focus: symbol!(
+                        gdk,
+                        "gdk_window_focus",
+                        unsafe extern "C" fn(*mut c_void, u32)
+                    ),
+                    timeout_add: symbol!(
+                        glib,
+                        "g_timeout_add",
+                        unsafe extern "C" fn(
+                            u32,
+                            unsafe extern "C" fn(*mut c_void) -> c_int,
+                            *mut c_void,
+                        ) -> u32
+                    ),
+                    source_remove: symbol!(
+                        glib,
+                        "g_source_remove",
+                        unsafe extern "C" fn(u32) -> c_int
+                    ),
+                    events_pending: symbol!(
+                        gtk,
+                        "gtk_events_pending",
+                        unsafe extern "C" fn() -> c_int
+                    ),
+                    main_iteration_do: symbol!(
+                        gtk,
+                        "gtk_main_iteration_do",
+                        unsafe extern "C" fn(c_int) -> c_int
+                    ),
+                    display_get_default: symbol!(
+                        gdk,
+                        "gdk_display_get_default",
+                        unsafe extern "C" fn() -> *mut c_void
+                    ),
+                    display_flush: symbol!(
+                        gdk,
+                        "gdk_display_flush",
+                        unsafe extern "C" fn(*mut c_void)
+                    ),
+                    display_sync: symbol!(
+                        gdk,
+                        "gdk_display_sync",
+                        unsafe extern "C" fn(*mut c_void)
+                    ),
                     slist_free: symbol!(glib, "g_slist_free", unsafe extern "C" fn(*mut GSList)),
                     free: symbol!(glib, "g_free", unsafe extern "C" fn(*mut c_void)),
                     _gtk: gtk,
                     _glib: glib,
+                    _gdk: gdk,
                 };
                 let mut argc: c_int = 0;
                 let mut argv: *mut *mut c_char = ptr::null_mut();
@@ -232,6 +310,46 @@ mod gtk {
     fn api() -> Option<&'static Api> {
         static API: OnceLock<Option<Api>> = OnceLock::new();
         API.get_or_init(Api::load).as_ref()
+    }
+
+    struct FocusState {
+        dialog: *mut c_void,
+        finished: Cell<bool>,
+    }
+
+    unsafe extern "C" fn focus_dialog(data: *mut c_void) -> c_int {
+        let Some(api) = api() else {
+            return 0;
+        };
+        let state = unsafe { &*(data.cast::<FocusState>()) };
+        let window = unsafe { (api.widget_get_window)(state.dialog) };
+        if window.is_null() || unsafe { (api.window_is_viewable)(window) } == 0 {
+            return 1;
+        }
+        unsafe {
+            (api.window_present)(state.dialog);
+            (api.window_focus)(window, 0);
+        }
+        state.finished.set(true);
+        0
+    }
+
+    /// GTK keeps a separate X connection whose requests are flushed by the GLib main
+    /// loop. The reader's winit loop never services that context, so a closed dialog
+    /// would stay mapped on screen. Flush and drain it before returning to egui.
+    fn drain_pending_events(api: &Api) {
+        unsafe {
+            let display = (api.display_get_default)();
+            if !display.is_null() {
+                (api.display_flush)(display);
+                (api.display_sync)(display);
+            }
+            let mut remaining = 1000;
+            while (api.events_pending)() != 0 && remaining > 0 {
+                (api.main_iteration_do)(0);
+                remaining -= 1;
+            }
+        }
     }
 
     fn path_from_gtk(api: &Api, value: *mut c_char) -> Option<PathBuf> {
@@ -298,7 +416,17 @@ mod gtk {
         if let Some(file_name) = file_name.and_then(|name| CString::new(name).ok()) {
             unsafe { (api.set_current_name)(dialog, file_name.as_ptr()) };
         }
+        let focus_state = Box::new(FocusState {
+            dialog,
+            finished: Cell::new(false),
+        });
+        let focus_data = Box::into_raw(focus_state);
+        let focus_source = unsafe { (api.timeout_add)(100, focus_dialog, focus_data.cast()) };
         let response = unsafe { (api.dialog_run)(dialog) };
+        let focus_state = unsafe { Box::from_raw(focus_data) };
+        if !focus_state.finished.get() && focus_source != 0 {
+            unsafe { (api.source_remove)(focus_source) };
+        }
         let paths = if response == GTK_RESPONSE_ACCEPT {
             match mode {
                 GtkMode::OpenMany => unsafe {
@@ -322,6 +450,7 @@ mod gtk {
             None
         };
         unsafe { (api.widget_destroy)(dialog) };
+        drain_pending_events(api);
         paths
     }
 }

@@ -61,7 +61,7 @@ ssh -X user@server
 fpdf /path/to/document.pdf
 ```
 
-若桌面环境输出 `xdg-document-portal` 或 DBus 警告，可用 `dbus-run-session -- fpdf /path/to/document.pdf` 启动；文件选择器使用系统 GTK 3，不依赖 portal。16 bit X11 转发画面可能出现渐变色带，这是显示链路色深造成的，不会修改 PDF 内容；需要精确核对颜色时请将客户端 X server 设为 24/32 bit。
+若桌面环境输出 `xdg-document-portal` 或 DBus 警告，可用 `dbus-run-session -- fpdf /path/to/document.pdf` 启动；文件选择器使用系统 GTK 3，不依赖 portal。选定文件或点击“取消”、按 `Esc` 后，选择窗口会立即关闭并返回阅读器。16 bit X11 转发画面可能出现渐变色带，这是显示链路色深造成的，不会修改 PDF 内容；需要精确核对颜色时请将客户端 X server 设为 24/32 bit。
 
 ## 基本阅读
 
@@ -151,7 +151,7 @@ YOUR_API_KEY
 - `GLXBadContextTag` 或无法打开窗口：发行版自带的 `libfpdf-glx-compat.so` 会绕过旧版 Mesa 的交换间隔报错，请从安装目录用 `./fpdf` 或 `~/.local/bin/fpdf` 启动，并确认该文件与 `fpdf-bin` 仍在；若手工运行 `fpdf-bin`，需要自行设置 `LD_PRELOAD`。同时检查 `DISPLAY`、X11 转发和客户端 X server；GL/EGL 不可用时可尝试 `LIBGL_ALWAYS_SOFTWARE=1 fpdf`。
 - 缺少 `libpdfium.so`：完整安装或解压，保留整个目录。
 - AI 无法连接：保留 `ai/`，检查配置格式、服务地址、密钥与模型权限。
-- 文件选择窗口不出现：确认系统安装 GTK 3.22 或更新版本；也可直接将 PDF 路径作为参数传入。
+- 文件选择窗口不出现、关闭后仍停留在屏幕上或无法取消：确认系统安装 GTK 3.22 或更新版本，并使用当前发行包；也可直接将 PDF 路径作为参数传入。
 - 中文显示为方框：确认安装目录中的 `fonts/wqy-microhei.ttc` 未被删除。
 - 目录保存失败：检查写权限、外部修改、密码与数字签名，或另存副本。
 
