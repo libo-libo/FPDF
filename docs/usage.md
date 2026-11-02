@@ -2,21 +2,21 @@
 
 Windows x64 PDF 阅读器，使用 Rust 编写。支持连续阅读、目录编辑、夜间与护眼模式，以及基于 pi agent 的 AI 辅助阅读。PDF 解析使用独立 PDFium，无需安装 WPS。
 
-[下载最新版](https://github.com/libo-libo/FPDF/releases/latest) · [中文 PDF 使用说明](https://github.com/libo-libo/FPDF/releases/download/v0.8.5/fpdf-0.8.5-user-guide-zh-CN.pdf) · [更新记录](https://github.com/libo-libo/FPDF/blob/main/CHANGELOG.md)
+[下载最新版](https://github.com/libo-libo/FPDF/releases/latest) · [中文 PDF 使用说明](https://github.com/libo-libo/FPDF/releases/download/v0.8.6/fpdf-0.8.6-user-guide-zh-CN.pdf) · [更新记录](https://github.com/libo-libo/FPDF/blob/main/CHANGELOG.md)
 
 ![夜间模式与目录页码](https://raw.githubusercontent.com/libo-libo/FPDF/main/docs/fpdf-outline-pages-preview.png)
 
 ## 从 GitHub 下载和安装
 
 1. 打开 [FPDF 仓库](https://github.com/libo-libo/FPDF)，点击右侧 **Releases**；也可以直接打开[版本下载页](https://github.com/libo-libo/FPDF/releases/latest)。
-2. 进入最新版本（当前 **v0.8.5**），展开下方 **Assets**。点击文件名下载，无需 Git 或 GitHub 账号。
+2. 进入最新版本（当前 **v0.8.6**），展开下方 **Assets**。点击文件名下载，无需 Git 或 GitHub 账号。
 3. 选择下面的安装程序或免安装包。`Source code (zip)` / `Source code (tar.gz)` 是开发用源码，不能直接作为阅读器运行。
 
 | 文件 | 使用方法 |
 | --- | --- |
-| `fpdf-0.8.5-windows-x64-setup.exe` | 双击，按向导安装到当前用户目录，创建开始菜单快捷方式；可在 Windows 设置中卸载。 |
-| `fpdf-0.8.5-windows-x64.zip` | 右键 → 全部解压，再打开解压目录中的 `fpdf.exe`。 |
-| `fpdf-0.8.5-user-guide-zh-CN.pdf` | 中文使用说明，包含下载、阅读、目录编辑和 AI 翻译。 |
+| `fpdf-0.8.6-windows-x64-setup.exe` | 双击，按向导安装到当前用户目录，创建开始菜单快捷方式；可在 Windows 设置中卸载。 |
+| `fpdf-0.8.6-windows-x64.zip` | 右键 → 全部解压，再打开解压目录中的 `fpdf.exe`。 |
+| `fpdf-0.8.6-user-guide-zh-CN.pdf` | 中文使用说明，包含下载、阅读、目录编辑和 AI 翻译。 |
 | `SHA256SUMS.txt` | 下载校验值，使用以下命令核对。 |
 
 要求 Windows 10/11 x64。发行包自带 PDFium 与 AI 所需的 Node.js，无需安装 Rust、Node.js 或开发工具。**保留整个程序目录**，包括 `pdfium.dll`、`ai/` 和许可证，不能只复制 `fpdf.exe`。当前安装程序未做代码签名。
@@ -24,12 +24,12 @@ Windows x64 PDF 阅读器，使用 Rust 编写。支持连续阅读、目录编�
 在 PowerShell 中计算文件 SHA-256，与同版本的 `SHA256SUMS.txt` 对照：
 
 ```powershell
-Get-FileHash .\fpdf-0.8.5-windows-x64-setup.exe -Algorithm SHA256
+Get-FileHash .\fpdf-0.8.6-windows-x64-setup.exe -Algorithm SHA256
 ```
 
 升级前关闭旧版，再运行新安装程序；免安装版建议解压到新目录。自行创建的 AI 配置建议放在 `%APPDATA%/fpdf/agent.txt`，便于升级保留。
 
-0.8.5 修正版补充了 Windows P 图标、应用内 API 配置和一键卸载入口。安装版可从“文件 → 卸载 fpdf（清除全部配置）”或开始菜单同名入口确认后移除程序及其保存的 AI 配置、主题、缓存和日志；保留用户 PDF。Windows 设置的“已安装的应用”也支持卸载。
+0.8.6 新增顶部栏整体折叠与界面字号调节：关闭“顶部栏”后标题栏和工具栏一起收起，左侧导航窗格与顶部导航条仍保留恢复入口；顶部导航条中的“界面字号”滑块统一调整各界面文字大小（75%–175%），不改变 PDF 页面缩放。顶部工具栏下边缘可拖动调整高度，标签栏的新建与关闭按钮尺寸和垂直对齐已修正。安装版可一键卸载并清理 AI 配置、主题、缓存和日志，保留用户 PDF。
 
 ## 基本阅读
 
@@ -45,7 +45,7 @@ Get-FileHash .\fpdf-0.8.5-windows-x64-setup.exe -Algorithm SHA256
 - 点击“打开文件”、按 `Ctrl+O`，或把 PDF 拖入窗口。加密文档按提示输入密码。
 - 默认连续阅读，可切换“单页阅读”。右侧实心滚动条支持拖动定位。
 - 点击缩略图、目录名称或右侧页码跳转；底部可输入页码。“后退 / 前进”返回先前位置。
-- 顶部及底部均有缩小 / 放大；百分比支持输入 **10%–500%** 后按 Enter，也可拖动滑块或使用 `Ctrl+滚轮`。
+- 顶部及底部均有缩小 / 放大；百分比支持输入 **10%–500%** 后按 Enter，也可拖动滑块或使用 `Ctrl+滚轮`。鼠标位于阅读助手内时，`Ctrl+滚轮` 仅调整回答字号（10–32pt），普通滚轮继续滚动消息，不改变 PDF 缩放。大图使用可见区域的高清分块渲染，随缩放重新采样，不再把受整页分辨率上限限制的位图拉伸显示。滚动复用重叠分块，优先显示视口内容，文字坐标与链接单独读取；保留 64 MiB 缓存和原生位图内存保护。
 - “实际大小”为 100%；“适合宽度”随窗口调整，“适合页面”完整显示当前页；旋转每次 90°。
 - 连续模式缩小后按可用宽度自动显示每行 **2、4、8 页**；放大恢复单列。点击小页面选为当前页。单页模式始终显示一页。
 - PDF 正文目录中带内部链接的章节可直接点击跳转，支持直接目标和命名目标；悬停显示手形和目标页码。点击顶部“后退”或按 `Alt+←` 返回原页和滚动位置，`Alt+→` 前进。普通文字及扫描目录若未嵌入链接，不会自动变成跳转项。
@@ -83,7 +83,7 @@ PDF 区域按 `Ctrl+Z` 撤销本次打开文档后添加的高亮，按 `Ctrl+Y`
 
 无需先打开 PDF，即可点击“连接”测试 API、获取模型列表，或使用“保存并连接”。PDF 总结、翻译及问答仍需先打开文档。0.8.5 已修复未打开文档时连接按钮灰色不可用的问题。
 
-AI 使用 pi agent core / pi-ai，默认模型 **GLM-5.3-Flash**。**发布文件不包含作者的 AI 接口地址、密钥或账号**，需要自行配置兼容 OpenAI 的服务。
+AI 使用 pi agent core / pi-ai，默认模型 **DeepSeek V4.1 Flash（dsv4.1 flash）**，会匹配接口返回的对应模型 ID；接口缺少该模型或调用不可用时，自动尝试其他允许的模型；正在输出的回答会保留。Claude 系列已禁用，不进入可选列表。**发布文件不包含作者的 AI 接口地址、密钥或账号**，需要自行配置兼容 OpenAI 的服务。
 
 复制 `agent.example.txt` 为 `agent.txt`，填写两行（以下都是占位符）：
 
@@ -98,7 +98,7 @@ YOUR_API_KEY
 
 点击“AI 辅助阅读”即可直接看到问题输入框，无需先翻译。选中文字后可点击工具栏或右键中的“针对选区提问”，问题会包含选区、附近上下文和页码；也可直接问整份文档。输入后点击“发送问题”（未连接时为“连接并提问”），或按 `Ctrl+Enter`。
 
-可从服务返回的列表切换模型，可用性取决于自己的服务权限。“总结当前页”“概览文档”快速获取要点。回答流式显示，“第 N 页”可跳转引用。切换文档或模型会结束旧会话。
+可从服务返回的列表切换模型，可用性取决于自己的服务权限。“总结当前页”读取当前页；“概览文档”要求读取从第一页到最后一页的完整文本，再综合要点。全文问题也可直接要求“通读全文后回答”。回答流式显示，“第 N 页”可跳转引用。切换文档或模型会结束旧会话。
 
 ### 选词翻译：单次与长开
 
@@ -114,7 +114,7 @@ YOUR_API_KEY
 
 ![夜间模式 AI 辅助阅读](https://raw.githubusercontent.com/libo-libo/FPDF/main/docs/fpdf-ai-preview.png)
 
-普通阅读在本机完成。连接时读取模型列表；AI 问答或翻译会把问题、文件名、目录、选区及相关页面文本发送给自己配置的服务。Agent 只提供 PDF 文本读取工具，每次最多读 5 页，没有命令执行或文件写入工具。扫描图片文字目前需要另行 OCR。
+普通阅读在本机完成。连接时读取模型列表；AI 问答或翻译会把问题、文件名、目录、选区及相关页面文本发送给自己配置的服务。Agent 只提供指定页与全文文本读取工具，没有命令执行或文件写入工具。全文读取在内部逐批取页，覆盖所有页面，不再限制为几页，也不截断单页正文或自动清空长会话。全文任务会将整份文档的可提取文本发送给配置的服务；模型服务自身仍有上下文容量限制，超过时会报错，需要换用容量更大的模型。扫描图片文字目前需要另行 OCR。
 
 ## 快捷键和常见问题
 

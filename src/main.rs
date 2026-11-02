@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ai_markdown;
 mod ai_reader;
 mod app;
 mod color_palette;

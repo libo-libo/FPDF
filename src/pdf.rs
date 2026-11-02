@@ -1,6 +1,7 @@
 //! A small, thread-confined binding to the public PDFium C API.
 //! No WPS binary is loaded or linked. See runtime/licenses for PDFium notices.
 use libloading::Library;
+use std::cell::RefCell;
 use std::ffi::{CString, c_char, c_int, c_ulong, c_void};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -215,6 +216,7 @@ struct Document {
 pub struct PdfEngine {
     api: Rc<Api>,
     document: Option<Document>,
+    render_page: RefCell<Option<(u32, Handle)>>,
     _thread_confined: PhantomData<Rc<()>>,
 }
 
@@ -232,6 +234,7 @@ pub struct PageImage {
 impl PageImage {
     pub fn bytes(&self) -> usize {
         self.rgba.len()
+            + self.text.len()
             + self.links.len() * std::mem::size_of::<PdfLink>()
             + self.geometry.as_ref().map_or(0, |g| g.bytes())
     }
@@ -328,6 +331,7 @@ impl PdfEngine {
         Ok(Self {
             api: Rc::new(api),
             document: None,
+            render_page: RefCell::new(None),
             _thread_confined: PhantomData,
         })
     }
@@ -338,6 +342,7 @@ impl PdfEngine {
         Self {
             api: self.api.clone(),
             document: None,
+            render_page: RefCell::new(None),
             _thread_confined: PhantomData,
         }
     }
@@ -464,6 +469,12 @@ impl PdfEngine {
     }
 
     pub fn close(&mut self) {
+        if let Some((_, page)) = self.render_page.get_mut().take() {
+            // SAFETY: Cached page belongs to this thread and is closed before its document.
+            unsafe {
+                (self.api.close_page)(page);
+            }
+        }
         if let Some(doc) = self.document.take() {
             // SAFETY: All page/bitmap/text guards have already dropped.
             unsafe {
@@ -473,6 +484,69 @@ impl PdfEngine {
     }
 
     pub fn render(&self, index: u32, width: u32, rotation: u8) -> Result<PageImage, PdfError> {
+        self.render_part(index, width, rotation, None, false, false)
+    }
+
+    /// A navigation image needs only pixels, never selection geometry or links.
+    pub fn render_thumbnail(
+        &self,
+        index: u32,
+        width: u32,
+        rotation: u8,
+    ) -> Result<PageImage, PdfError> {
+        if !(64..=8192).contains(&width) || rotation > 3 {
+            return Err(PdfError::new("无效的缩略图尺寸。"));
+        }
+        // Very small PDF device transforms are pathological for dense schematics.
+        // Render at a modest resolution, then area-sample, without text/link walks.
+        let mut image = self
+            .render_part(index, width.max(1024), rotation, None, false, true)
+            .or_else(|_| self.render_part(index, width, rotation, None, false, true))?;
+        if image.width != width {
+            let (height, rgba) =
+                crate::reading::thumbnail_rgba(&image.rgba, [image.width, image.height], width);
+            image.width = width;
+            image.height = height;
+            image.rgba = rgba;
+        }
+        Ok(image)
+    }
+
+    pub(crate) fn render_target(
+        &self,
+        target: crate::worker::RenderTarget,
+    ) -> Result<PageImage, PdfError> {
+        if target.thumbnail {
+            return self.render_thumbnail(target.page, target.width, target.rotation);
+        }
+        if target.metadata_only {
+            return self.render_part(target.page, 64, target.rotation, None, true, false);
+        }
+        match target.tile {
+            Some(tile) => self.render_tile(target.page, target.width, target.rotation, tile),
+            None => self.render(target.page, target.width, target.rotation),
+        }
+    }
+
+    pub fn render_tile(
+        &self,
+        index: u32,
+        full_width: u32,
+        rotation: u8,
+        tile: crate::reading::RasterTile,
+    ) -> Result<PageImage, PdfError> {
+        self.render_part(index, full_width, rotation, Some(tile), false, false)
+    }
+
+    fn render_part(
+        &self,
+        index: u32,
+        width: u32,
+        rotation: u8,
+        tile: Option<crate::reading::RasterTile>,
+        metadata_only: bool,
+        thumbnail_only: bool,
+    ) -> Result<PageImage, PdfError> {
         let doc = self
             .document
             .as_ref()
@@ -480,19 +554,29 @@ impl PdfEngine {
         if index >= doc.pages {
             return Err(PdfError::new("页码超出文档范围。"));
         }
-        if !(64..=8192).contains(&width) || rotation > 3 {
+        if !(64..=if tile.is_some() { 262_144 } else { 8192 }).contains(&width) || rotation > 3 {
             return Err(PdfError::new("无效的渲染尺寸或旋转角度。"));
         }
         // SAFETY: All handles here belong to this live engine and are used only
         // on its thread. Guards destroy subordinate handles before returning.
         unsafe {
-            let page = (self.api.load_page)(doc.handle, index as c_int);
-            if page.is_null() {
-                return Err(PdfError::new("无法加载此页。"));
+            // Reuse the parsed vector display list for neighbouring tiles on this page.
+            let mut cached = self.render_page.borrow_mut();
+            if cached.as_ref().is_some_and(|(page, _)| *page != index)
+                && let Some((_, handle)) = cached.take()
+            {
+                (self.api.close_page)(handle);
             }
-            let _page = Guard {
-                handle: page,
-                close: self.api.close_page,
+            let page = match *cached {
+                Some((_, handle)) => handle,
+                None => {
+                    let handle = (self.api.load_page)(doc.handle, index as c_int);
+                    if handle.is_null() {
+                        return Err(PdfError::new("无法加载此页。"));
+                    }
+                    *cached = Some((index, handle));
+                    handle
+                }
             };
             let points = [(self.api.page_width)(page), (self.api.page_height)(page)];
             let [pw, ph] = if rotation.is_multiple_of(2) {
@@ -503,11 +587,50 @@ impl PdfEngine {
             if !pw.is_finite() || !ph.is_finite() || pw <= 0.0 || ph <= 0.0 {
                 return Err(PdfError::new("PDF 页面尺寸无效。"));
             }
-            let height_f = (width as f64 * ph as f64 / pw as f64).round();
-            if !(1.0..=32768.0).contains(&height_f) || width as u64 * height_f as u64 > MAX_PIXELS {
-                return Err(PdfError::new("当前页面渲染尺寸过大，请降低缩放比例。"));
+            if metadata_only {
+                let (text, text_truncated) = self.page_text(page);
+                return Ok(PageImage {
+                    width: 1,
+                    height: 1,
+                    rgba: vec![255; 4],
+                    points,
+                    text,
+                    text_truncated,
+                    links: self.page_links(doc, page, rotation),
+                    geometry: self
+                        .page_geometry(page, index, rotation, [pw, ph])
+                        .map(Arc::new),
+                });
             }
-            let height = height_f as u32;
+            let height_f = (width as f64 * ph as f64 / pw as f64).round();
+            if !(1.0..=262_144.0).contains(&height_f) {
+                return Err(PdfError::new("页面尺寸过大。"));
+            }
+            let full_width = width;
+            let full_height = height_f as u32;
+            let region = tile.unwrap_or(crate::reading::RasterTile {
+                x: 0,
+                y: 0,
+                width,
+                height: full_height,
+            });
+            if region.width == 0
+                || region.height == 0
+                || region
+                    .x
+                    .checked_add(region.width)
+                    .is_none_or(|end| end > full_width)
+                || region
+                    .y
+                    .checked_add(region.height)
+                    .is_none_or(|end| end > full_height)
+                || u64::from(region.width) * u64::from(region.height) > MAX_PIXELS
+                || (tile.is_some() && (region.width > 1024 || region.height > 1024))
+            {
+                return Err(PdfError::new("当前页面渲染区域过大或超出页面。"));
+            }
+            let width = region.width;
+            let height = region.height;
             // Format 4 = FPDFBitmap_BGRA. Let PDFium allocate a valid stride.
             let bitmap = (self.api.bitmap_create)(
                 width as c_int,
@@ -531,12 +654,18 @@ impl PdfEngine {
             (self.api.render)(
                 bitmap,
                 page,
-                0,
-                0,
-                width as c_int,
-                height as c_int,
+                -(region.x as c_int),
+                -(region.y as c_int),
+                full_width as c_int,
+                full_height as c_int,
                 rotation as c_int,
-                3,
+                if thumbnail_only {
+                    1 | 0x200
+                } else if full_width <= 512 {
+                    1 | 0x7000
+                } else {
+                    1
+                },
             );
             let stride = (self.api.bitmap_stride)(bitmap);
             let buffer = (self.api.bitmap_buffer)(bitmap);
@@ -546,14 +675,24 @@ impl PdfEngine {
             let src =
                 std::slice::from_raw_parts(buffer.cast::<u8>(), stride as usize * height as usize);
             let mut rgba = vec![0; width as usize * height as usize * 4];
-            for y in 0..height as usize {
-                for x in 0..width as usize {
-                    let s = y * stride as usize + x * 4;
-                    let t = (y * width as usize + x) * 4;
-                    rgba[t..t + 4].copy_from_slice(&[src[s + 2], src[s + 1], src[s], src[s + 3]]);
+            for (source, output) in src
+                .chunks_exact(stride as usize)
+                .zip(rgba.chunks_exact_mut(width as usize * 4))
+            {
+                for (bgra, pixel) in source
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(output.as_chunks_mut::<4>().0.iter_mut())
+                {
+                    pixel.copy_from_slice(&[bgra[2], bgra[1], bgra[0], bgra[3]]);
                 }
             }
-            let (text, text_truncated) = self.page_text(page);
+            let (text, text_truncated) = if tile.is_none() && !thumbnail_only {
+                self.page_text(page)
+            } else {
+                (String::new(), false)
+            };
             Ok(PageImage {
                 width,
                 height,
@@ -561,8 +700,12 @@ impl PdfEngine {
                 points,
                 text,
                 text_truncated,
-                links: self.page_links(doc, page, rotation),
-                geometry: (width >= 256)
+                links: if tile.is_none() && !thumbnail_only {
+                    self.page_links(doc, page, rotation)
+                } else {
+                    Vec::new()
+                },
+                geometry: (tile.is_none() && !thumbnail_only && width >= 256)
                     .then(|| self.page_geometry(page, index, rotation, [pw, ph]))
                     .flatten()
                     .map(Arc::new),
@@ -589,6 +732,11 @@ impl PdfEngine {
                 close: self.api.text_close,
             };
             let count = (self.api.text_count)(text).max(0);
+            // Dense schematics already use native selection on demand when geometry is
+            // truncated. Avoid a costly partial glyph walk that cannot serve that cache.
+            if count > 20_000 {
+                return None;
+            }
             let mut glyphs = Vec::with_capacity(count.min(20000) as usize);
             for index in 0..count.min(20000) {
                 let character =
@@ -674,7 +822,7 @@ impl PdfEngine {
                 handle,
                 close: self.api.close_page,
             };
-            let (text, truncated) = self.page_text(handle);
+            let (text, truncated) = self.page_text_with_limit(handle, c_int::MAX);
             Ok(PageText {
                 page,
                 text,
@@ -1025,6 +1173,9 @@ impl PdfEngine {
     }
 
     unsafe fn page_text(&self, page: Handle) -> (String, bool) {
+        unsafe { self.page_text_with_limit(page, 100_000) }
+    }
+    unsafe fn page_text_with_limit(&self, page: Handle, max_chars: c_int) -> (String, bool) {
         // SAFETY: Caller guarantees a live page on the PDFium-owning thread.
         unsafe {
             let text = (self.api.text_load)(page);
@@ -1036,7 +1187,7 @@ impl PdfEngine {
                 close: self.api.text_close,
             };
             let count = (self.api.text_count)(text).max(0);
-            let limit = count.min(100_000);
+            let limit = count.min(max_chars);
             let mut utf16 = vec![0; limit as usize + 1];
             let copied = (self.api.text_get)(text, 0, limit, utf16.as_mut_ptr()).max(0) as usize;
             utf16.truncate(copied.min(utf16.len()));

@@ -173,8 +173,10 @@ impl WindowApp {
     fn tab_bar(&mut self, ctx: &egui::Context) -> Option<(TabAction, Option<usize>)> {
         let mut action = None;
         self.controls.clear();
+        let row_height = header_row_height(ctx);
         egui::TopBottomPanel::top("document-tabs")
-            .exact_height(36.0)
+            .frame(header_row_frame(ctx))
+            .exact_height(header_panel_height(ctx, 36.0))
             .show(ctx, |ui| {
                 ui.horizontal_top(|ui| {
                     egui::ScrollArea::horizontal()
@@ -196,7 +198,7 @@ impl WindowApp {
                                         };
                                         let button = ui
                                             .add_sized(
-                                                [190.0, 28.0],
+                                                [190.0, row_height],
                                                 egui::Button::new(egui::RichText::new(label))
                                                     .selected(index == self.active)
                                                     .truncate(),
@@ -211,7 +213,7 @@ impl WindowApp {
                                             action = Some((TabAction::Switch(index), None));
                                         }
                                         let close = ui
-                                            .add_sized([28.0, 28.0], egui::Button::new("×"))
+                                            .add_sized([28.0, row_height], egui::Button::new("×"))
                                             .on_hover_text("关闭标签页 · Ctrl+W");
                                         self.controls
                                             .insert(format!("close-{}", tab.id), close.rect);
@@ -225,7 +227,7 @@ impl WindowApp {
                             });
                         });
                     let plus = ui
-                        .add_sized([28.0, 28.0], egui::Button::new("＋"))
+                        .add_sized([28.0, row_height], egui::Button::new("＋"))
                         .on_hover_text("新标签页 · Ctrl+T");
                     self.controls.insert("new-tab".into(), plus.rect);
                     if plus.clicked() {

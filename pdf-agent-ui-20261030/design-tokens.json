@@ -1,0 +1,18 @@
+{
+  "version": "2026-10-30",
+  "unit": "logical pixels at 100%; map to egui points before device scaling",
+  "sidebar": {"defaultWidth": 420, "comfortableMin": 380, "previewNarrow": 340, "maxWidth": 600, "padding": 20, "headerHeight": 64, "tabHeight": 39},
+  "spacing": [4, 8, 12, 16, 20, 24, 32],
+  "radius": {"control": 7, "composer": 11, "userMessage": 12, "inlineCode": 4},
+  "type": {
+    "ui": {"families": ["Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "sans-serif"], "size": 13},
+    "answer": {"size": 15, "lineHeight": 1.85, "paragraphGap": 15},
+    "heading": {"size": 15, "weight": 600, "lineHeight": 1.55},
+    "metadata": {"size": 12},
+    "code": {"families": ["Consolas", "Cascadia Code", "monospace"], "size": 12, "lineHeight": 1.6},
+    "presets": {"clear": {"size": 15, "lineHeight": 1.85}, "bookish": {"size": 16, "lineHeight": 1.9, "families": ["Noto Serif CJK SC", "Source Han Serif SC", "SimSun", "serif"]}, "compact": {"size": 14, "lineHeight": 1.75}},
+    "sizeOptions": [14, 15, 16, 18]
+  },
+  "light": {"background": "#EEEFEE", "surface": "#FFFFFF", "soft": "#F5F6F6", "text": "#252B32", "muted": "#626A76", "border": "#E4E7EB", "accent": "#5550B8", "accentSoft": "#EFEDFB", "success": "#36745C", "error": "#A53939", "primaryFill": "#5550B8", "primaryText": "#FFFFFF"},
+  "dark": {"background": "#191C21", "surface": "#22262D", "soft": "#2C313A", "text": "#E2E5EB", "muted": "#A5ADBB", "border": "#383E49", "accent": "#B2A8F5", "accentSoft": "#36314E", "success": "#82BFA1", "error": "#F09797", "primaryFill": "#7B6CD1", "primaryText": "#FFFFFF"}
+}

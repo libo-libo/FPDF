@@ -846,9 +846,72 @@ impl ReaderApp {
         self.cache
             .iter()
             .rev()
-            .find(|e| e.target.page == self.page && !e.target.thumbnail)
+            .find(|e| e.target.page == self.page && !e.target.thumbnail && e.target.tile.is_none())
             .map(|e| e.image.as_ref())
     }
+    fn update_tile_preview(
+        &mut self,
+        ctx: &egui::Context,
+        target: RenderTarget,
+        image: &PageImage,
+    ) {
+        let Some(tile) = target.tile else {
+            return;
+        };
+        let [pw, ph] = if target.rotation.is_multiple_of(2) {
+            image.points
+        } else {
+            [image.points[1], image.points[0]]
+        };
+        let height = (512.0 * ph / pw).round().max(1.0) as u32;
+        // Keep the same memory guard for pathological, extremely tall pages.
+        if height > 8192 {
+            return;
+        }
+        let key = RenderTarget {
+            width: 512,
+            tile: None,
+            metadata_only: false,
+            ..target
+        };
+        let index = match self.cache.iter().position(|e| e.target == key) {
+            Some(index) => index,
+            None => {
+                let preview = Arc::new(PageImage {
+                    width: 512,
+                    height,
+                    rgba: vec![255; 512 * height as usize * 4],
+                    points: image.points,
+                    text: String::new(),
+                    text_truncated: false,
+                    geometry: None,
+                    links: Vec::new(),
+                });
+                self.cache.push_back(CachedPage {
+                    target: key,
+                    texture: texture(ctx, self.theme, key, &preview),
+                    image: preview,
+                });
+                self.cache.len() - 1
+            }
+        };
+        let entry = &mut self.cache[index];
+        let preview = Arc::make_mut(&mut entry.image);
+        let full_height = (target.width as f64 * ph as f64 / pw as f64).round() as u32;
+        fpdf::reading::stitch_preview(
+            &mut preview.rgba,
+            [512, height],
+            tile,
+            [target.width, full_height],
+            &image.rgba,
+        );
+        let rgba = self.theme.rgba(&preview.rgba);
+        entry.texture.set(
+            egui::ColorImage::from_rgba_unmultiplied([512, height as usize], &rgba),
+            egui::TextureOptions::LINEAR,
+        );
+    }
+
     fn poll(&mut self, ctx: &egui::Context) {
         while let Ok(r) = self.responses.try_recv() {
             if r.document_id != self.document_id {
@@ -865,6 +928,7 @@ impl ReaderApp {
             }
             match r.result {
                 Ok(image) => {
+                    self.update_tile_preview(ctx, r.target, &image);
                     self.errors.remove(&r.target);
                     if self
                         .cache
@@ -875,7 +939,7 @@ impl ReaderApp {
                     }
                     self.cache.retain(|e| e.target != r.target);
                     while !self.cache.is_empty()
-                        && (self.cache.len() >= 32.max(self.wanted.len() + 2)
+                        && (self.cache.len() >= 256.max(self.wanted.len() + 2)
                             || self.cache.iter().map(|e| e.image.bytes()).sum::<usize>()
                                 + image.bytes()
                                 > 64 * 1024 * 1024)
@@ -883,8 +947,15 @@ impl ReaderApp {
                         let i = self
                             .cache
                             .iter()
-                            .position(|e| !self.wanted.contains(&e.target))
-                            .unwrap_or(0);
+                            .enumerate()
+                            .min_by_key(|(_, e)| {
+                                (
+                                    self.wanted.contains(&e.target),
+                                    e.target.width <= 512,
+                                    std::cmp::Reverse(e.image.bytes()),
+                                )
+                            })
+                            .map_or(0, |(i, _)| i);
                         self.cache.remove(i);
                     }
                     let tex = texture(ctx, self.theme, r.target, &image);
@@ -907,9 +978,13 @@ impl ReaderApp {
             }
         }
         self.busy = self.error.is_none()
-            && self.wanted.iter().filter(|t| !t.thumbnail).any(|t| {
-                !self.cache.iter().any(|e| e.target == *t) && !self.errors.contains_key(t)
-            });
+            && self
+                .wanted
+                .iter()
+                .filter(|t| !t.thumbnail && !t.metadata_only)
+                .any(|t| {
+                    !self.cache.iter().any(|e| e.target == *t) && !self.errors.contains_key(t)
+                });
     }
     fn submit(&mut self, targets: Vec<RenderTarget>) {
         self.wanted = targets;
@@ -1251,6 +1326,12 @@ impl ReaderApp {
         }
     }
     fn header(&mut self, ctx: &egui::Context) {
+        // Cover spacing between the stacked panels as part of the header, too.
+        // Panel content may grow with fallback-font metrics beyond its own clip.
+        let header_background = ctx.layer_painter(egui::LayerId::background());
+        let background_shape = header_background.add(egui::Shape::Noop);
+        let header_top = ctx.available_rect().min;
+
         if self.toolbar_visible {
             egui::TopBottomPanel::top("title")
                 .exact_height(
@@ -1296,7 +1377,8 @@ impl ReaderApp {
                 });
         }
         egui::TopBottomPanel::top("navigation-ribbon")
-            .exact_height(34.0)
+            .frame(header_row_frame(ctx))
+            .exact_height(header_panel_height(ctx, 34.0))
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.menu_button("文件",|ui| {
@@ -1619,6 +1701,17 @@ impl ReaderApp {
                     .insert("toolbar-panel".into(), toolbar.response.rect);
             }
         }
+        header_background.set(
+            background_shape,
+            egui::Shape::rect_filled(
+                Rect::from_min_max(
+                    header_top,
+                    egui::pos2(ctx.content_rect().right(), ctx.available_rect().top()),
+                ),
+                0.0,
+                self.panel(),
+            ),
+        );
     }
     fn navigation(&mut self, ctx: &egui::Context) {
         self.thumbnails.clear();
@@ -1860,6 +1953,8 @@ impl ReaderApp {
                                 width: 180,
                                 rotation: self.rotation,
                                 thumbnail: true,
+                                tile: None,
+                                metadata_only: false,
                             };
                             let size = self.info.as_ref().map_or([612.0, 792.0], |i| i.sizes[n]);
                             let ratio = if self.rotation.is_multiple_of(2) {
@@ -2129,14 +2224,42 @@ impl ReaderApp {
                         viewport.max.y + viewport.height(),
                     )]
                     .to_vec();
+                    let raster_viewport = [
+                        viewport.min.x,
+                        viewport.min.y,
+                        viewport.max.x,
+                        viewport.max.y,
+                    ];
+                    let raster_density = fpdf::reading::viewport_raster_density(
+                        &placements,
+                        raster_viewport,
+                        ctx.pixels_per_point(),
+                    );
+                    let mut details = Vec::new();
+
                     for p in placements {
                         let target = RenderTarget {
                             page: p.page,
-                            width: render_width(p.width, p.height, ctx.pixels_per_point()),
+                            width: render_width(p.width, p.height, ctx.pixels_per_point()).min(512),
                             rotation: self.rotation,
                             thumbnail: false,
+                            tile: None,
+                            metadata_only: false,
                         };
-                        targets.push(target);
+                        let (full_width, tiles) =
+                            fpdf::reading::visible_tiles(&p, raster_viewport, raster_density);
+                        if !tiles.is_empty() {
+                            targets.push(RenderTarget {
+                                width: 64,
+                                metadata_only: true,
+                                ..target
+                            });
+                            details.extend(tiles.into_iter().map(|tile| RenderTarget {
+                                width: full_width,
+                                tile: Some(tile),
+                                ..target
+                            }));
+                        }
                         let rect = Rect::from_min_size(
                             origin + Vec2::new(p.left, p.top),
                             Vec2::new(p.width, p.height),
@@ -2151,7 +2274,10 @@ impl ReaderApp {
                             .cache
                             .iter()
                             .filter(|e| {
-                                e.target.page == target.page && e.target.rotation == target.rotation
+                                e.target.page == target.page
+                                    && e.target.rotation == target.rotation
+                                    && e.target.tile.is_none()
+                                    && !e.target.metadata_only
                             })
                             .min_by_key(|e| {
                                 (e.target.thumbnail, e.target.width.abs_diff(target.width))
@@ -2189,7 +2315,12 @@ impl ReaderApp {
                                 origin + viewport.min.to_vec2(),
                                 origin + viewport.max.to_vec2(),
                             );
-                            if rect.intersects(visible) {
+                            if rect.intersects(visible)
+                                && details
+                                    .iter()
+                                    .filter(|t| t.page == p.page)
+                                    .any(|t| !self.cache.iter().any(|e| e.target == *t))
+                            {
                                 self.visible_missing += 1;
                             }
                             ui.painter().text(
@@ -2199,6 +2330,44 @@ impl ReaderApp {
                                 egui::FontId::proportional(14.0),
                                 self.muted(),
                             );
+                        }
+                        let mut tile_images = self
+                            .cache
+                            .iter()
+                            .filter(|e| {
+                                e.target.page == p.page
+                                    && e.target.rotation == self.rotation
+                                    && e.target.tile.is_some()
+                            })
+                            .collect::<Vec<_>>();
+                        tile_images.sort_by_key(|e| {
+                            std::cmp::Reverse(e.target.width.abs_diff(full_width))
+                        });
+                        for entry in tile_images {
+                            let tile = entry.target.tile.unwrap();
+                            let scale = p.width / entry.target.width as f32;
+                            let tile_rect = Rect::from_min_size(
+                                rect.min + Vec2::new(tile.x as f32, tile.y as f32) * scale,
+                                Vec2::new(tile.width as f32, tile.height as f32) * scale,
+                            );
+                            let full_height = (entry.target.width as f64 * p.height as f64
+                                / p.width as f64)
+                                .round() as u32;
+                            let core = tile.core(entry.target.width, full_height);
+                            let core_rect = Rect::from_min_size(
+                                rect.min + Vec2::new(core.x as f32, core.y as f32) * scale,
+                                Vec2::new(core.width as f32, core.height as f32) * scale,
+                            );
+                            if tile_rect.intersects(ui.clip_rect()) {
+                                ui.painter()
+                                    .with_clip_rect(core_rect.intersect(ui.clip_rect()))
+                                    .image(
+                                        entry.texture.id(),
+                                        tile_rect,
+                                        Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                                        Color32::WHITE,
+                                    );
+                            }
                         }
                         ui.painter().rect_stroke(
                             rect,
@@ -2254,7 +2423,9 @@ impl ReaderApp {
                                 .cache
                                 .iter()
                                 .find(|e| {
-                                    e.target.page == p.page && e.target.rotation == self.rotation
+                                    e.target.page == p.page
+                                        && e.target.rotation == self.rotation
+                                        && e.target.metadata_only
                                 })
                                 .map(|e| &e.image.links);
                             if let Some(link) = links.and_then(|links| {
@@ -2302,6 +2473,8 @@ impl ReaderApp {
                             );
                         }
                     }
+                    details.append(&mut targets);
+                    targets = details;
                 });
                 self.scroll_y = output.state.offset.y;
                 let track = Rect::from_min_size(
@@ -2334,12 +2507,16 @@ impl ReaderApp {
                     );
                 }
                 targets.sort_by_key(|t| t.page.abs_diff(self.page));
-                for &page in &self.thumbnails {
+                let mut thumbnail_pages = self.thumbnails.clone();
+                thumbnail_pages.sort_by_key(|page| page.abs_diff(self.page));
+                for page in thumbnail_pages {
                     targets.push(RenderTarget {
                         page,
                         width: 180,
                         rotation: self.rotation,
                         thumbnail: true,
+                        tile: None,
+                        metadata_only: false,
                     });
                 }
                 self.submit(targets);
@@ -2382,7 +2559,7 @@ impl ReaderApp {
     fn double_click_test(&mut self, key: &str) {
         self.smoke_double_click = Some((self.smoke_hits[key].center(), 42));
     }
-    fn smoke_reading_step(&mut self, ctx: &egui::Context) {
+    fn smoke_reading_step(&mut self, _ctx: &egui::Context) {
         match self.smoke_step {
             0 => self.click_test_control("outline-tab"),
             1 => {
@@ -2519,19 +2696,27 @@ impl ReaderApp {
                     .iter()
                     .filter(|e| {
                         !e.target.thumbnail
-                            && e.target.width
-                                == render_width(
-                                    self.layout.placement(e.target.page).unwrap().width,
-                                    self.layout.placement(e.target.page).unwrap().height,
-                                    ctx.pixels_per_point(),
-                                )
+                            && e.target.tile.is_none()
+                            && !e.target.metadata_only
+                            && e.target.width == 512
                     })
                     .map(|e| (e.target, e.texture.id()))
                     .collect();
-                assert_eq!(
-                    self.smoke_texture_ids.len(),
-                    3,
-                    "all three full-size pages must be warm before auditing scroll frames"
+                for page in 0..3 {
+                    assert!(
+                        self.cache
+                            .iter()
+                            .any(|e| !e.target.thumbnail && e.target.page == page),
+                        "each visited page must retain a cached image for immediate scroll feedback"
+                    );
+                }
+                assert!(
+                    !self.smoke_texture_ids.is_empty(),
+                    "assembled page previews must remain warm"
+                );
+                assert!(
+                    self.cache.iter().map(|e| e.image.bytes()).sum::<usize>() <= 64 * 1024 * 1024,
+                    "high-resolution rendering must preserve the cache memory budget"
                 );
                 self.goto(1);
             }
@@ -2548,7 +2733,7 @@ impl ReaderApp {
                         self.cache
                             .iter()
                             .any(|e| e.target == *target && e.texture.id() == *id),
-                        "scrolling must not discard and recreate cached page textures"
+                        "scrolling must retain assembled previews while visible tiles refine"
                     );
                 }
                 self.audit_cached_scroll = false;
@@ -2633,7 +2818,7 @@ impl ReaderApp {
                 assert!(self.rgb_window);
                 assert_eq!(self.rgb_draft, self.custom_rgb);
                 println!(
-                    "Reading UI verified: inline rename/cancel/persistence, RGB keyboard input, right scrollbar drag, cached continuous pages without placeholders or texture recreation"
+                    "Reading UI verified: inline rename/cancel/persistence, RGB keyboard input, right scrollbar drag, budgeted high-resolution pages with cached previews and no placeholders"
                 );
                 println!(
                     "Palette UI verified: visible palette click configures reading color immediately and updates RGB; brightness click synchronizes values; Cancel restores old color; Confirm retains selection; top and bottom background entries work"
@@ -3555,7 +3740,7 @@ impl ReaderApp {
                         );
                     }
                     22 => println!(
-                        "Original one-shot translation and explanation preserved; separate persistent toggles verified: arm/disable, auto word/multiline on release only, mutually exclusive modes and translating indicator; GLM-5.3-Flash"
+                        "Original one-shot translation and explanation preserved; separate persistent toggles verified: arm/disable, auto word/multiline on release only, mutually exclusive modes and translating indicator; DeepSeek V4.1 Flash"
                     ),
                     _ => {}
                 }
@@ -3853,7 +4038,7 @@ impl ReaderApp {
                         let rect = self.smoke_hits["interface-font-size"];
                         self.smoke_zoom_before =
                             ctx.style().text_styles[&egui::TextStyle::Body].size;
-                        let pos = egui::pos2(rect.right() - 8.0, rect.center().y);
+                        let pos = egui::pos2(rect.right() - 1.0, rect.center().y);
                         self.smoke_events = vec![
                             egui::Event::PointerMoved(pos),
                             egui::Event::PointerButton {
@@ -3866,7 +4051,7 @@ impl ReaderApp {
                     }
                     40 => {
                         let rect = self.smoke_hits["interface-font-size"];
-                        let pos = egui::pos2(rect.right() - 8.0, rect.center().y);
+                        let pos = egui::pos2(rect.right() - 1.0, rect.center().y);
                         self.smoke_events = vec![egui::Event::PointerButton {
                             pos,
                             button: egui::PointerButton::Primary,
@@ -3878,6 +4063,15 @@ impl ReaderApp {
                         assert!(
                             ctx.style().text_styles[&egui::TextStyle::Body].size
                                 > self.smoke_zoom_before
+                        );
+                        let default_body =
+                            egui::Style::default().text_styles[&egui::TextStyle::Body].size;
+                        assert!(
+                            (ctx.style().text_styles[&egui::TextStyle::Body].size / default_body
+                                - 1.75)
+                                .abs()
+                                < 0.01,
+                            "UI smoke must exercise the maximum interface font size"
                         );
                         assert_eq!(ctx.zoom_factor(), 1.0);
                         println!(
@@ -3941,7 +4135,10 @@ fn texture(
 ) -> egui::TextureHandle {
     let rgba = theme.rgba(&image.rgba);
     ctx.load_texture(
-        format!("page-{}-{}-{}", target.page, target.width, target.thumbnail),
+        format!(
+            "page-{}-{}-{}-{:?}",
+            target.page, target.width, target.thumbnail, target.tile
+        ),
         egui::ColorImage::from_rgba_unmultiplied(
             [image.width as usize, image.height as usize],
             &rgba,
@@ -3949,8 +4146,35 @@ fn texture(
         egui::TextureOptions::LINEAR,
     )
 }
+// Header rows must include the real font metrics and button padding. A fixed
+// panel height can allocate overflowing content outside its painted clip rect.
+fn header_row_height(ctx: &egui::Context) -> f32 {
+    let style = ctx.style();
+    let font = egui::TextStyle::Button.resolve(&style);
+    let text_height = ctx.fonts_mut(|fonts| {
+        fonts.row_height(&font).max(
+            fonts
+                .layout_no_wrap("界面字号 开始 Aa ＋ ×".into(), font, Color32::WHITE)
+                .size()
+                .y,
+        )
+    });
+    (text_height + style.spacing.button_padding.y * 2.0)
+        .ceil()
+        .max(28.0)
+}
+
+fn header_row_frame(ctx: &egui::Context) -> egui::Frame {
+    egui::Frame::side_top_panel(&ctx.style()).inner_margin(egui::Margin::symmetric(8, 0))
+}
+
+fn header_panel_height(ctx: &egui::Context, minimum: f32) -> f32 {
+    let frame = header_row_frame(ctx);
+    (header_row_height(ctx) + frame.inner_margin.sum().y + 2.0).max(minimum)
+}
+
 impl eframe::App for ReaderApp {
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
         if let Some((start, end, phase)) = self.smoke_drag.take() {
             let position = if phase == 0 { start } else { end };
             input.events.push(egui::Event::PointerMoved(position));
@@ -3983,12 +4207,22 @@ impl eframe::App for ReaderApp {
                 modifiers: egui::Modifiers::CTRL,
             });
         }
+        let mut wheel_pointer = ctx.input(|i| i.pointer.hover_pos());
         input.events.retain(|event| {
+            if let egui::Event::PointerMoved(position) = event {
+                wheel_pointer = Some(*position);
+            }
+            if matches!(event, egui::Event::PointerGone) {
+                wheel_pointer = None;
+            }
             if let egui::Event::MouseWheel {
                 delta, modifiers, ..
             } = event
                 && modifiers.ctrl
             {
+                if self.ai.zoom_wheel(wheel_pointer, delta.y) {
+                    return false;
+                }
                 if delta.y != 0.0 {
                     self.scale(if delta.y > 0.0 { 1.2 } else { 1.0 / 1.2 });
                 }
