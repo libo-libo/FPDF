@@ -32,6 +32,9 @@ impl Prompt {
 #[derive(Default)]
 pub struct AiReader {
     pub width_limit: Option<f32>,
+    answer_size: f32,
+    panel_rect: Option<egui::Rect>,
+    stopped: bool,
     pub controls: std::collections::HashMap<&'static str, egui::Rect>,
     pub visible: bool,
     child: Option<Child>,
@@ -68,6 +71,27 @@ impl Drop for AiReader {
 }
 
 impl AiReader {
+    /// Return true only when this panel owns the zoom gesture.
+    pub fn zoom_wheel(&mut self, pointer: Option<egui::Pos2>, delta: f32) -> bool {
+        if !self.visible
+            || !pointer
+                .zip(self.panel_rect)
+                .is_some_and(|(p, r)| r.contains(p))
+        {
+            return false;
+        }
+        let current = if self.answer_size == 0.0 {
+            15.0
+        } else {
+            self.answer_size
+        };
+        if delta != 0.0 {
+            self.answer_size =
+                (current * if delta > 0.0 { 1.1 } else { 1.0 / 1.1 }).clamp(10.0, 32.0);
+        }
+        true
+    }
+
     fn poll_config_import(&mut self) {
         let result = self
             .config_import
@@ -268,7 +292,7 @@ impl AiReader {
             self.events = Some(rx);
             self.child = Some(child);
             self.send(json!({"type":"init","config_path":config,"model":self.model,"document":{
-                "title":title,"page_count":info.sizes.len(),"outline":info.bookmarks.iter().take(500).map(|m| json!({"title":m.title,"page":m.page.map(|p| p+1),"depth":m.depth})).collect::<Vec<_>>()
+                "title":title,"page_count":info.sizes.len(),"outline":info.bookmarks.iter().map(|m| json!({"title":m.title,"page":m.page.map(|p| p+1),"depth":m.depth})).collect::<Vec<_>>()
             }}));
             self.status = "正在连接接口并加载模型…".into();
             Ok(())
@@ -304,6 +328,10 @@ impl AiReader {
                         event["endpoint"].as_str().unwrap_or_default()
                     );
                 }
+                "model" => {
+                    self.model = event["model"].as_str().unwrap_or_default().into();
+                    self.status = event["text"].as_str().unwrap_or("已自动切换模型").into();
+                }
                 "read_pages" => {
                     if let (Some(id), Some(pages)) =
                         (event["id"].as_u64(), event["pages"].as_array())
@@ -329,7 +357,7 @@ impl AiReader {
                     }
                 }
                 "done" => {
-                    if self.busy && !self.run_error && !self.has_pending_prompt() {
+                    if self.busy && !self.run_error && !self.stopped && !self.has_pending_prompt() {
                         self.status = if self.translation_mode {
                             "翻译完成 · 可继续选取内容自动翻译"
                         } else {
@@ -388,13 +416,26 @@ impl AiReader {
         selection: Option<&fpdf::pdf::PdfSelection>,
     ) -> Option<u32> {
         if !self.visible {
+            self.panel_rect = None;
             return None;
         }
         if !self.config_initialized {
             self.load_config_editor();
         }
         self.poll_config_import();
-        for key in ["ai-config-endpoint", "ai-config-key", "ai-config-save"] {
+        for key in [
+            "ai-connect",
+            "ai-config",
+            "ai-config-import",
+            "ai-config-endpoint",
+            "ai-config-key",
+            "ai-config-save",
+            "ai-translate",
+            "ai-auto-translate",
+            "ai-explain",
+            "ai-auto-explain",
+            "ai-citation",
+        ] {
             self.controls.remove(key);
         }
         let mut jump = None;
@@ -407,19 +448,23 @@ impl AiReader {
             self.connect(ctx, info, title);
         }
         let maximum = self.width_limit.unwrap_or(600.0);
-        egui::SidePanel::right("ai-reader").default_width(340.0_f32.min(maximum)).min_width(220.0_f32.min(maximum)).max_width(maximum).show(ctx, |ui| {
+        let panel = egui::SidePanel::right("ai-reader").default_width(420.0_f32.min(maximum)).min_width(220.0_f32.min(maximum)).max_width(maximum).show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.strong("AI 辅助阅读");
-                ui.label(egui::RichText::new("pi agent").small());
+                ui.strong("阅读助手");
+                ui.label(if self.busy { "生成中" } else if self.ready { "已连接" } else { "未连接" });
                 let close=ui.small_button("关闭");
                 self.controls.insert("ai-close",close.rect);
                 if close.clicked() { self.visible = false; }
             });
-            ui.horizontal_wrapped(|ui| {
+            ui.horizontal(|ui| {
                 let connect = ui.button(if self.ready { "重新连接" } else { "连接" })
                     .on_hover_text("未打开 PDF 也可测试连接；重新连接会停止当前回答。");
                 self.controls.insert("ai-connect", connect.rect);
                 if connect.clicked() { self.connect(ctx, info.map_or(&empty_document, |value| value.as_ref()), title); }
+
+            });
+            egui::CollapsingHeader::new("设置与连接").default_open(self.config_editor_open).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
                 let config_button = ui.button("API 配置");
                 self.controls.insert("ai-config", config_button.rect);
                 if config_button.clicked() { self.config_editor_open = !self.config_editor_open; }
@@ -446,7 +491,7 @@ impl AiReader {
                     ui.label("API 密钥");
                     let key = ui.add(egui::TextEdit::singleline(&mut self.config_key).password(true).desired_width(f32::INFINITY).hint_text("填写服务商提供的密钥"));
                     self.controls.insert("ai-config-key", key.rect);
-                    ui.label(egui::RichText::new("默认模型 GLM-5.3-Flash；连接后可切换可用模型。配置保存在当前用户的 AppData 中。密钥以本地文本保存，请勿分享配置文件。").small().weak());
+                    ui.label(egui::RichText::new("默认模型 DeepSeek V4.1 Flash；不可用时自动选择其他允许模型；Claude 系列已禁用。配置保存在当前用户的 AppData 中。密钥以本地文本保存，请勿分享配置文件。").small().weak());
                     let save = ui.button("保存并连接");
                     self.controls.insert("ai-config-save", save.rect);
                     if save.clicked() {
@@ -469,7 +514,31 @@ impl AiReader {
             if previous != self.model { self.connect(ctx, info.map_or(&empty_document, |value| value.as_ref()), title); }
             ui.label(egui::RichText::new(&self.status).small());
             ui.label(egui::RichText::new("翻译或提问时，相关文本会发送至配置的 API。").small().weak());
+
+            });
+            if self.busy || self.run_error { ui.label(&self.status); }
             ui.separator();
+            egui::TopBottomPanel::bottom("ai-composer").show_inside(ui, |ui| {
+            ui.strong(if selection.is_some() { "针对选区提问" } else { "文档问答" });
+            ui.add_enabled_ui(info.is_some(), |ui| {
+                let edit = ui.add(egui::TextEdit::multiline(&mut self.question).desired_rows(2).desired_width(f32::INFINITY).char_limit(8000).hint_text(if selection.is_some() { "直接输入关于选中文字的问题；Ctrl+Enter 发送" } else { "输入文档问题；Ctrl+Enter 发送" }));
+                self.controls.insert("ai-question-input", edit.rect);
+                if self.focus_question { edit.request_focus(); self.focus_question = false; }
+                let send = ui.add_enabled(!self.question.trim().is_empty(), egui::Button::new(if self.ready { "发送问题" } else { "连接并提问" }));
+                self.controls.insert("ai-question-send", send.rect);
+                if (edit.has_focus() && ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Enter))) || send.clicked() {
+                    let q = self.question.trim().to_owned();
+                    if !q.is_empty() { self.request_question(q, selection, page); self.question.clear(); }
+                }
+            });
+            if self.is_working() && ui.button("停止本次").clicked() { self.pending_translation = None; self.pending_question = None; self.send(json!({"type":"abort"})); self.stopped = true; self.status = "已停止".into(); }
+
+                ui.horizontal(|ui| {
+                    ui.label("正文字号").on_hover_text("鼠标放在阅读助手内，Ctrl+滚轮缩放回答；普通滚轮滚动历史。");
+                    if self.answer_size == 0.0 { self.answer_size = 15.0; }
+                    ui.add(egui::Slider::new(&mut self.answer_size, 10.0..=32.0).step_by(1.0));
+                });
+            });
             let mut prompt = None;
             let mut prompt_page = page;
             ui.add_enabled_ui(self.ready && !self.is_working() && info.is_some(), |ui| {
@@ -477,9 +546,10 @@ impl AiReader {
                     let summary = ui.button("总结当前页");
                     self.controls.insert("ai-summary", summary.rect);
                     if summary.clicked() { self.translation_mode = false; prompt = Some(Prompt::question("请总结当前页的要点，标注页码。")); }
-                    if ui.button("概览文档").clicked() { self.translation_mode = false; prompt = Some(Prompt::question("请按目录选择代表页面，概览这份文档的内容，并注明实际阅读了哪些页。")); }
+                    if ui.button("概览文档").clicked() { self.translation_mode = false; prompt = Some(Prompt::question("请使用 read_pdf_document 读取完整文档后概览内容，并注明实际阅读范围和无法提取文字的页面。")); }
                 });
             });
+
             ui.add_enabled_ui(!self.is_working(), |ui| {
                 if self.language.is_empty() { self.language = "中文".into(); }
                 ui.horizontal(|ui| {
@@ -510,25 +580,13 @@ impl AiReader {
                 });
             }
             if self.auto_translation.is_some() { ui.label(egui::RichText::new("长开已启用：松开鼠标后自动翻译。取消勾选可恢复单次操作。").small()); }
+
             self.controls.remove("ai-translating");
             if self.translating() {
                 let indicator = ui.horizontal(|ui| { ui.spinner(); ui.strong("翻译进行中…"); });
                 self.controls.insert("ai-translating", indicator.response.rect);
             }
             ui.separator();
-            ui.strong(if selection.is_some() { "针对选区提问" } else { "文档问答" });
-            ui.add_enabled_ui(info.is_some(), |ui| {
-                let edit = ui.add(egui::TextEdit::multiline(&mut self.question).desired_rows(2).desired_width(f32::INFINITY).char_limit(8000).hint_text(if selection.is_some() { "直接输入关于选中文字的问题；Ctrl+Enter 发送" } else { "输入文档问题；Ctrl+Enter 发送" }));
-                self.controls.insert("ai-question-input", edit.rect);
-                if self.focus_question { edit.request_focus(); self.focus_question = false; }
-                let send = ui.add_enabled(!self.question.trim().is_empty(), egui::Button::new(if self.ready { "发送问题" } else { "连接并提问" }));
-                self.controls.insert("ai-question-send", send.rect);
-                if (edit.has_focus() && ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Enter))) || send.clicked() {
-                    let q = self.question.trim().to_owned();
-                    if !q.is_empty() { self.request_question(q, selection, page); self.question.clear(); }
-                }
-            });
-            if self.is_working() && ui.button("停止本次").clicked() { self.pending_translation = None; self.pending_question = None; self.send(json!({"type":"abort"})); self.status = "正在停止…".into(); }
             if self.ready && !self.busy
                 && let Some((selection, detailed)) = self.pending_translation.take()
             { prompt = Some(Prompt::translation(self.translation_prompt(&selection, detailed))); }
@@ -540,15 +598,20 @@ impl AiReader {
                 if prompt.show_question { self.messages.push((true, prompt.display_question.clone().unwrap_or_else(|| prompt.text.clone()))); } else { self.messages.clear(); }
                 if !prompt.show_question { self.translation_runs += 1; }
                 self.messages.push((false, String::new()));
-                self.run_error = false;
+                self.run_error = false; self.stopped = false;
                 self.busy = true; self.status = if prompt.show_question { "正在思考…" } else { "翻译进行中…" }.into();
                 self.send(json!({"type":"prompt","page":prompt_page,"text":prompt.text}));
             }
             ui.separator();
             egui::ScrollArea::vertical().id_salt("ai-chat").stick_to_bottom(true).show(ui, |ui| {
-                for (user, text) in &self.messages {
+                if self.messages.is_empty() { ui.label(if info.is_some() { "从当前页开始：总结要点，或输入文档问题。" } else { "打开一份 PDF 后开始问答。" }); }
+                for (index, (user, text)) in self.messages.iter().enumerate() {
+                    ui.push_id(index, |ui| {
                     ui.strong(if *user { "你" } else if self.translation_mode { "译文" } else { "阅读助手" });
-                    ui.add(egui::Label::new(text).wrap().selectable(true));
+                    if *user { ui.add(egui::Label::new(text).wrap().selectable(true)); } else {
+                        crate::ai_markdown::show(ui, text, self.answer_size);
+                        if !text.is_empty() && ui.small_button("复制 Markdown").clicked() { ui.ctx().copy_text(text.clone()); }
+                    }
                     if !user {
                         ui.horizontal_wrapped(|ui| {
                             for p in cited_pages(text, info.map_or(0, |i| i.sizes.len() as u32)) {
@@ -558,10 +621,12 @@ impl AiReader {
                             }
                         });
                     }
-                    ui.separator();
+                    ui.add_space(24.0);
+                    });
                 }
             });
         });
+        self.panel_rect = Some(panel.response.rect);
         jump
     }
 
@@ -832,6 +897,91 @@ fn cited_pages(text: &str, count: u32) -> Vec<u32> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn automatic_model_change_retains_active_answer_and_updates_selector() {
+        let mut ai = super::AiReader::default();
+        ai.ready = true;
+        ai.busy = true;
+        ai.model = "deepseek-v4.1-flash".into();
+        ai.messages = vec![(true, "question".into()), (false, String::new())];
+        let (sender, receiver) = std::sync::mpsc::channel();
+        ai.events = Some(receiver);
+        sender
+            .send(
+                serde_json::json!({"type":"model","model":"gpt-secondary","text":"已自动切换模型"}),
+            )
+            .unwrap();
+        sender
+            .send(serde_json::json!({"type":"delta","text":"answer"}))
+            .unwrap();
+        assert!(ai.poll().is_empty());
+        assert_eq!(ai.model, "gpt-secondary");
+        assert!(ai.ready && ai.busy);
+        assert_eq!(ai.messages.len(), 2);
+        assert_eq!(ai.messages[1].1, "answer");
+        assert!(!ai.run_error);
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn wheel_zoom_is_local_bounded_and_reversible() {
+        let mut ai = super::AiReader::default();
+        ai.visible = true;
+        ai.panel_rect = Some(eframe::egui::Rect::from_min_max(
+            eframe::egui::pos2(700.0, 0.0),
+            eframe::egui::pos2(1200.0, 900.0),
+        ));
+        let inside = Some(eframe::egui::pos2(900.0, 300.0));
+        assert!(!ai.zoom_wheel(Some(eframe::egui::pos2(300.0, 300.0)), 1.0));
+        assert!(!ai.zoom_wheel(None, 1.0));
+        assert!(ai.zoom_wheel(inside, 1.0));
+        assert!((ai.answer_size - 16.5).abs() < 0.01);
+        assert!(ai.zoom_wheel(inside, -1.0));
+        assert!((ai.answer_size - 15.0).abs() < 0.01);
+        for _ in 0..100 {
+            ai.zoom_wheel(inside, 1.0);
+        }
+        assert_eq!(ai.answer_size, 32.0);
+        for _ in 0..100 {
+            ai.zoom_wheel(inside, -1.0);
+        }
+        assert_eq!(ai.answer_size, 10.0);
+        ai.visible = false;
+        assert!(!ai.zoom_wheel(inside, 1.0));
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn composer_stays_visible_with_long_answers_at_supported_widths() {
+        for width in [340.0, 420.0, 600.0] {
+            let mut ai = super::AiReader::default();
+            ai.visible = true;
+            ai.config_initialized = true;
+            ai.width_limit = Some(width);
+            ai.messages = vec![(false, "## Answer\n\n**Value** `signal`\n\n".repeat(200))];
+            let ctx = eframe::egui::Context::default();
+            let screen = eframe::egui::Rect::from_min_size(
+                eframe::egui::Pos2::ZERO,
+                eframe::egui::vec2(1200.0, 900.0),
+            );
+            for _ in 0..2 {
+                let _ = ctx.run(
+                    eframe::egui::RawInput {
+                        screen_rect: Some(screen),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        ai.show(ctx, None, "", 0, None);
+                    },
+                );
+            }
+            assert!(screen.contains_rect(ai.controls["ai-question-input"]));
+            assert!(screen.contains_rect(ai.controls["ai-question-send"]));
+            assert!(!ai.controls.contains_key("ai-citation"));
+        }
+    }
+
     #[test]
     fn ai_config_import_accepts_bom_and_rejects_invalid_addresses_without_echoing_secrets() {
         let imported =

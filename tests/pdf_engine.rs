@@ -140,6 +140,8 @@ fn shared_reader_sessions_are_isolated() {
                     width,
                     rotation: 0,
                     thumbnail: false,
+                    tile: None,
+                    metadata_only: false,
                 }],
             })
             .unwrap();
@@ -710,12 +712,151 @@ fn search_and_highlight_round_trip(pdf: &mut PdfEngine) {
     pdf.open(&fixture("reading-demo.pdf"), "").unwrap();
 }
 
+fn agent_reads_beyond_render_text_limit(pdf: &mut PdfEngine) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("dense-text.pdf");
+    let mut document = lopdf::Document::load(fixture("reading-demo.pdf")).unwrap();
+    let page = document.get_pages()[&1];
+    let mut content = String::new();
+    for line in 0..110 {
+        content.push_str(&format!(
+            "BT /F1 0.5 Tf 40 {} Td ({}) Tj ET\n",
+            740 - line * 4,
+            "x".repeat(1000)
+        ));
+    }
+    content.push_str("BT /F1 10 Tf 40 100 Td (END-OF-FULL-PAGE) Tj ET");
+    let stream = document.add_object(lopdf::Stream::new(
+        lopdf::Dictionary::new(),
+        content.into_bytes(),
+    ));
+    document
+        .get_object_mut(page)
+        .unwrap()
+        .as_dict_mut()
+        .unwrap()
+        .set("Contents", stream);
+    document.save(&path).unwrap();
+    pdf.open(&path, "").unwrap();
+    let text = pdf.read_text(0).unwrap();
+    assert!(!text.truncated);
+    assert!(
+        text.text.len() > 100_000,
+        "len={} start={:?}",
+        text.text.len(),
+        text.text.chars().take(100).collect::<String>()
+    );
+    assert!(text.text.contains("END-OF-FULL-PAGE"));
+}
+
+fn clipped_vectors_match_full_page_at_every_rotation(pdf: &mut PdfEngine) {
+    use fpdf::reading::RasterTile;
+    pdf.open(&fixture("reading-demo.pdf"), "").unwrap();
+    let tile = RasterTile {
+        x: 117,
+        y: 82,
+        width: 541,
+        height: 257,
+    };
+    for rotation in 0..4 {
+        let full = pdf.render(0, 1024, rotation).unwrap();
+        let clipped = pdf.render_tile(0, 1024, rotation, tile).unwrap();
+        assert_eq!((clipped.width, clipped.height), (tile.width, tile.height));
+        assert!(clipped.geometry.is_none() && clipped.text.is_empty() && clipped.links.is_empty());
+        for row in 0..tile.height {
+            let start = ((row + tile.y) * full.width + tile.x) as usize * 4;
+            let expected = &full.rgba[start..start + tile.width as usize * 4];
+            let begin = row as usize * tile.width as usize * 4;
+            let got = &clipped.rgba[begin..begin + expected.len()];
+            let bad = got
+                .iter()
+                .zip(expected)
+                .enumerate()
+                .filter(|(i, (a, b))| {
+                    *i >= 16 * 4 && *i < (tile.width as usize - 16) * 4 && a.abs_diff(**b) > 8
+                })
+                .map(|(i, (a, b))| (i / 4, *a, *b))
+                .collect::<Vec<_>>();
+            assert!(
+                bad.len() < 8,
+                "rotation={rotation} row={row} differences={:?}",
+                &bad[..bad.len().min(12)]
+            );
+        }
+    }
+    for rotation in 0..4 {
+        let thumbnail = pdf.render_thumbnail(0, 180, rotation).unwrap();
+        assert_eq!(thumbnail.width, 180);
+        assert_eq!(thumbnail.height, if rotation % 2 == 0 { 233 } else { 139 });
+        assert!(
+            thumbnail.text.is_empty() && thumbnail.links.is_empty() && thumbnail.geometry.is_none()
+        );
+        assert!(
+            thumbnail
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|p| p[0] > 150 && p[0].saturating_sub(p[1]) > 40),
+            "thumbnail must retain visible red page content after rotation"
+        );
+    }
+    assert!(pdf.render_thumbnail(0, 0, 0).is_err());
+    let huge = pdf
+        .render_tile(
+            0,
+            20000,
+            0,
+            RasterTile {
+                x: 12000,
+                y: 5000,
+                width: 768,
+                height: 768,
+            },
+        )
+        .unwrap();
+    assert_eq!(huge.rgba.len(), 768 * 768 * 4);
+    assert!(
+        pdf.render_tile(
+            0,
+            1024,
+            0,
+            RasterTile {
+                x: 1020,
+                y: 0,
+                width: 20,
+                height: 20
+            }
+        )
+        .is_err()
+    );
+    assert!(
+        pdf.render_tile(
+            0,
+            20000,
+            0,
+            RasterTile {
+                x: 0,
+                y: 0,
+                width: 2048,
+                height: 2048
+            }
+        )
+        .is_err()
+    );
+    pdf.open(&fixture("linked-toc.pdf"), "").unwrap();
+    pdf.open(&fixture("reading-demo.pdf"), "").unwrap();
+    assert!(!pdf.read_text(0).unwrap().text.is_empty());
+}
+
 // One end-to-end test deliberately serializes PDFium's process-global runtime.
 // Missing runtime is a real failure, never a skipped/false-positive success.
 #[test]
 fn real_pdf_loading_rendering_and_worker_lifecycle() {
     let mut pdf = PdfEngine::new(&library_path().expect("PDFium runtime installed")).unwrap();
     internal_links_and_underlines(&mut pdf);
+    agent_reads_beyond_render_text_limit(&mut pdf);
+    clipped_vectors_match_full_page_at_every_rotation(&mut pdf);
     assert!(PdfEngine::new(&library_path().unwrap()).is_err());
     assert_eq!(pdf.open(&fixture("reading-demo.pdf"), "").unwrap(), 3);
     let info = pdf.document_info().unwrap();
@@ -1011,12 +1152,16 @@ fn real_pdf_loading_rendering_and_worker_lifecycle() {
             width: 612,
             rotation: 0,
             thumbnail: false,
+            tile: None,
+            metadata_only: false,
         })
         .chain((0..2).map(|page| RenderTarget {
             page,
             width: 180,
             rotation: 0,
             thumbnail: true,
+            tile: None,
+            metadata_only: false,
         }))
         .collect::<Vec<_>>();
     tx.send(ViewportRequest {
@@ -1157,6 +1302,8 @@ fn real_pdf_loading_rendering_and_worker_lifecycle() {
         width: 792,
         rotation: 1,
         thumbnail: false,
+        tile: None,
+        metadata_only: false,
     };
     tx.send(ViewportRequest {
         id: 101,
@@ -1169,6 +1316,86 @@ fn real_pdf_loading_rendering_and_worker_lifecycle() {
     let r = rx.recv_timeout(Duration::from_secs(10)).unwrap();
     assert_eq!(r.target, rotated);
     assert_eq!(r.result.unwrap().height, 612);
+    let tile_targets = [0, 384].map(|x| RenderTarget {
+        page: 0,
+        width: 16000,
+        rotation: 0,
+        thumbnail: false,
+        metadata_only: false,
+        tile: Some(fpdf::reading::RasterTile {
+            x,
+            y: 0,
+            width: 384,
+            height: 384,
+        }),
+    });
+    for id in [102, 103] {
+        tx.send(ViewportRequest {
+            id,
+            document_id: 10,
+            path: fixture("reading-demo.pdf"),
+            password: String::new(),
+            targets: tile_targets.to_vec(),
+        })
+        .unwrap();
+        for target in tile_targets {
+            let response = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert_eq!(response.id, id);
+            assert_eq!(response.document_id, 10);
+            assert_eq!(response.target, target);
+            assert_eq!(response.result.unwrap().width, 384);
+        }
+    }
+    let metadata = RenderTarget {
+        page: 0,
+        width: 64,
+        metadata_only: true,
+        ..rotated
+    };
+    tx.send(ViewportRequest {
+        id: 104,
+        document_id: 10,
+        path: fixture("reading-demo.pdf"),
+        password: String::new(),
+        targets: vec![metadata],
+    })
+    .unwrap();
+    let response = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(response.target, metadata);
+    let image = response.result.unwrap();
+    assert_eq!((image.width, image.height, image.rgba.len()), (1, 1, 4));
+    assert!(!image.text.is_empty());
+    assert_eq!(image.geometry.as_ref().unwrap().rotation, 1);
+    let thumbnail_target = RenderTarget {
+        page: 0,
+        width: 180,
+        rotation: 0,
+        thumbnail: true,
+        tile: None,
+        metadata_only: false,
+    };
+    let mut first_thumbnail = None;
+    for id in [105, 106] {
+        tx.send(ViewportRequest {
+            id,
+            document_id: 10,
+            path: fixture("reading-demo.pdf"),
+            password: String::new(),
+            targets: vec![thumbnail_target],
+        })
+        .unwrap();
+        let response = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(response.id, id);
+        let image = response.result.unwrap();
+        assert!(image.text.is_empty() && image.links.is_empty() && image.geometry.is_none());
+        if let Some(previous) = first_thumbnail {
+            assert!(
+                std::sync::Arc::ptr_eq(&previous, &image),
+                "returning to a thumbnail must reuse the rendered pixels"
+            );
+        }
+        first_thumbnail = Some(image);
+    }
     drop(tx);
     assert!(matches!(
         rx.recv_timeout(Duration::from_secs(10)),

@@ -27,6 +27,8 @@ pub struct RenderTarget {
     pub width: u32,
     pub rotation: u8,
     pub thumbnail: bool,
+    pub tile: Option<crate::reading::RasterTile>,
+    pub metadata_only: bool,
 }
 #[derive(Clone)]
 pub struct ViewportRequest {
@@ -124,7 +126,7 @@ pub struct HighlightResponse {
 }
 
 struct CachedPage {
-    key: (u32, u32, u8),
+    key: RenderTarget,
     image: Arc<PageImage>,
     last_used: std::time::Instant,
 }
@@ -154,8 +156,8 @@ impl Session {
         }
         Ok(())
     }
-    fn render(&mut self, page: u32, width: u32, rotation: u8) -> Result<Arc<PageImage>, PdfError> {
-        let key = (page, width, rotation);
+    fn render(&mut self, target: RenderTarget) -> Result<Arc<PageImage>, PdfError> {
+        let key = target;
         if let Some(i) = self.cache.iter().position(|entry| entry.key == key) {
             let mut entry = self.cache.remove(i).unwrap();
             let image = entry.image.clone();
@@ -167,9 +169,9 @@ impl Session {
             self.engine
                 .as_ref()
                 .map_err(Clone::clone)?
-                .render(page, width, rotation)?,
+                .render_target(target)?,
         );
-        while self.cache.len() >= 16
+        while self.cache.len() >= 256
             || self
                 .cache
                 .iter()
@@ -218,6 +220,8 @@ pub fn spawn(
                         width: request.width,
                         rotation: request.rotation,
                         thumbnail: false,
+                        tile: None,
+                        metadata_only: false,
                     }],
                 })
                 .is_err()
@@ -513,9 +517,7 @@ impl ReaderLoop {
         }
         let prepared = session.prepare(r.document_id, &r.path, &r.password);
         for (target_index, target) in r.targets.iter().enumerate() {
-            let value = prepared
-                .clone()
-                .and_then(|()| session.render(target.page, target.width, target.rotation));
+            let value = prepared.clone().and_then(|()| session.render(*target));
             let info = (session.document_id == Some(r.document_id)).then(|| session.info.clone());
             if out
                 .send(ViewportResponse {
